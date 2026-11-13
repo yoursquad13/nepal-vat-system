@@ -78,13 +78,34 @@ export type UserRole = 'ADMIN' | 'STAFF';
 export interface User {
   id: number;
   username: string;
-  fullName: string;
   email: string;
   role: UserRole;
   phone?: string | null;
-  isActive: boolean;
+  // Support both camelCase (from auth.ts) and snake_case (from users.ts / DB)
+  fullName?: string;
+  full_name?: string;
+  isActive?: boolean;
+  is_active?: boolean;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface CreateUserInput {
+  full_name: string;
+  username: string;
+  email: string;
+  password: string;
+  role: UserRole;
+  phone?: string | null;
+}
+
+export interface UpdateUserInput {
+  full_name?: string;
+  email?: string;
+  password?: string;
+  role?: UserRole;
+  phone?: string | null;
+  is_active?: boolean;
 }
 
 export type VatCalcMode = 'EXCLUSIVE' | 'INCLUSIVE';
@@ -222,17 +243,19 @@ export interface Payment {
   company_bank_account: string | null;
   payment_method: string;
   remarks: string | null;
-  is_void: boolean;
+  is_void?: boolean;
+  is_voided?: boolean;
   void_reason?: string | null;
   voided_at?: string | null;
   voided_by?: number | null;
+  slip?: PaymentSlip | null;
   slips?: PaymentSlip[];
 }
 
 export interface ActivityLog {
   id: number;
   entity_type: string;
-  entity_id: number;
+  entity_id: number | null;
   action: string;
   summary: string;
   old_values?: any;
@@ -293,20 +316,51 @@ export interface InventoryMovement {
   product_id: number;
   purchase_id: number | null;
   purchase_item_id: number | null;
-  movement_type: 'OPENING_STOCK' | 'STOCK_IN' | 'STOCK_OUT' | 'ADJUSTMENT_ADD' | 'ADJUSTMENT_SUB';
+  movement_type: 'OPENING_STOCK' | 'STOCK_IN' | 'STOCK_OUT' | 'ADJUSTMENT_ADD' | 'ADJUSTMENT_SUB' | 'ADJUSTMENT_IN' | 'ADJUSTMENT_OUT';
   reason: string;
   reference_label: string | null;
+  reference_no?: string | null;
   qty_in: number;
   qty_out: number;
+  quantity?: number;
   balance_after: number;
-  unit_cost: number;
+  unit_cost: number | null;
   movement_date_ad: string;
   movement_date_bs: string;
   responsible_staff_name: string;
+  responsible_staff_id?: number | null;
   created_at: string;
   product_name?: string;
   sku?: string;
   unit_of_measurement?: string;
+}
+
+export type StockOutReason = 'SOLD' | 'INTERNAL_ISSUE' | 'DAMAGED_EXPIRED' | 'OTHER';
+
+export interface StockOutParams {
+  productId: number;
+  quantity: number;
+  reason: StockOutReason;
+  movementDateAd?: string;
+  movementDateBs?: string;
+  referenceNo?: string | null;
+  remarks?: string | null;
+  allowNegativeOverride?: boolean;
+}
+
+export type AdjustmentType = 'OPENING_STOCK' | 'ADJUSTMENT_IN' | 'ADJUSTMENT_OUT';
+
+export interface AdjustmentParams {
+  productId: number;
+  type: AdjustmentType;
+  quantity: number;
+  unitCost?: number | null;
+  reason?: string;
+  movementDateAd?: string;
+  movementDateBs?: string;
+  referenceNo?: string | null;
+  remarks?: string | null;
+  allowNegativeOverride?: boolean;
 }
 
 // Search types
@@ -402,7 +456,48 @@ export interface SearchResponse {
   purchases: SearchPurchase[];
 }
 
-// Dashboard Response
+// Dashboard Types matching server/src/routes/dashboard.ts
+export interface DashboardMonthlySeriesItem {
+  bs_year_month: string;
+  label: string;
+  count: number;
+  purchase_amount: number;
+  vat_amount: number;
+  total_amount: number;
+  paid_amount: number;
+}
+
+export interface DashboardVendorWiseItem {
+  vendor_id: number;
+  vendor_name: string;
+  count: number;
+  total_amount: number;
+  paid_amount: number;
+  outstanding_amount: number;
+}
+
+export interface DashboardPaidVsUnpaid {
+  paid_amount: number;
+  unpaid_amount: number;
+  paid_count: number;
+  partial_count: number;
+  unpaid_count: number;
+}
+
+export interface DashboardVatStatusItem {
+  status: string;
+  count: number;
+  vat_amount: number;
+  total_amount: number;
+}
+
+export interface DashboardCharts {
+  monthly_series: DashboardMonthlySeriesItem[];
+  vendor_wise_purchases: DashboardVendorWiseItem[];
+  paid_vs_unpaid: DashboardPaidVsUnpaid;
+  vat_status_breakdown: DashboardVatStatusItem[];
+}
+
 export interface DashboardResponse {
   role: UserRole;
   is_admin: boolean;
@@ -437,13 +532,9 @@ export interface DashboardResponse {
     purchases_this_month_amount: number | null;
     total_inventory_valuation: number | null;
   };
-  charts?: {
-    purchases_by_month: Array<{ month: string; amount: number; count: number }>;
-    vat_collected_by_month: Array<{ month: string; vat_amount: number }>;
-    stock_status_pie: Array<{ name: string; value: number }>;
-  } | null;
+  charts: DashboardCharts | null;
   recent_entries: any[];
-  pending_vat_bills: any[];
+  pending_vat_bills?: any[];
   low_stock_alerts: any[];
 }
 
@@ -452,6 +543,86 @@ export interface BackupItem {
   format: 'sql' | 'json';
   size: number;
   createdAt: string;
+}
+
+// Vendor Payment Summary types matching server/src/routes/payments.ts
+export interface VendorPaymentSummaryKPI {
+  total_purchases: number;
+  total_purchase_amount: number;
+  total_vat_amount: number;
+  total_total_amount: number;
+  total_paid_amount: number;
+  total_unpaid_amount: number;
+  pending_payments_count: number;
+  pending_vat_bills_count: number;
+}
+
+export interface VendorPaymentSummaryRow {
+  vendor_id: number;
+  company_name: string;
+  contact_number: string;
+  pan_number: string;
+  purchases_count: number;
+  purchase_amount: number;
+  vat_amount: number;
+  total_amount: number;
+  paid_amount: number;
+  unpaid_amount: number;
+  pending_vat_bills_count: number;
+  received_vat_bills_count: number;
+  verified_vat_bills_count: number;
+}
+
+export interface UnpaidPurchaseItem {
+  id: number;
+  purchase_code: string;
+  bill_number: string | null;
+  vendor_id: number;
+  vendor_name: string;
+  company_name?: string;
+  contact_number: string;
+  purchase_date_ad: string;
+  purchase_date_bs: string;
+  fiscal_year: string;
+  total_amount: number;
+  paid_amount: number;
+  remaining_balance: number;
+  unpaid_amount: number;
+  review_status: ReviewStatus;
+  vat_bill_status: VatBillStatus;
+  payment_status: PaymentStatus;
+  product_summary: string;
+  created_at: string;
+}
+
+export interface VendorPaymentSummaryResponse {
+  summary: VendorPaymentSummaryKPI;
+  vendors: VendorPaymentSummaryRow[];
+  unpaid_purchases: UnpaidPurchaseItem[];
+}
+
+// Inventory Dashboard Response
+export interface InventoryDashboardResponse {
+  kpis: {
+    total_products: number;
+    total_stock_quantity: number;
+    total_inventory_valuation: number;
+    low_stock_count: number;
+    out_of_stock_count: number;
+  };
+  total_products?: number;
+  total_stock_quantity?: number;
+  total_inventory_valuation?: number;
+  low_stock_count?: number;
+  out_of_stock_count?: number;
+  low_stock_products: any[];
+  stock_table: any[];
+  recent_movements: {
+    in: InventoryMovement[];
+    out: InventoryMovement[];
+  };
+  recent_in: InventoryMovement[];
+  recent_out: InventoryMovement[];
 }
 
 // ==========================================
@@ -477,19 +648,19 @@ export const api = {
   // Users
   users: {
     list: () => apiFetch<{ users: User[] }>('/api/users'),
-    create: (data: Partial<User> & { password: string }) =>
+    create: (data: CreateUserInput) =>
       apiFetch<{ user: User }>('/api/users', {
         method: 'POST',
         body: JSON.stringify(data),
       }),
-    update: (id: number, data: Partial<User> & { password?: string }) =>
+    update: (id: number, data: UpdateUserInput) =>
       apiFetch<{ user: User }>(`/api/users/${id}`, {
         method: 'PATCH',
         body: JSON.stringify(data),
       }),
   },
 
-  // Settings
+  // App Settings
   settings: {
     get: () => apiFetch<{ settings: AppSettings }>('/api/settings'),
     update: (data: Partial<AppSettings>) =>
@@ -497,6 +668,17 @@ export const api = {
         method: 'PATCH',
         body: JSON.stringify(data),
       }),
+  },
+
+  // Audit Logs (Admin only)
+  auditLogs: {
+    list: (params?: { entity_type?: string; limit?: number; offset?: number }) => {
+      const sp = new URLSearchParams();
+      if (params?.entity_type) sp.set('entity_type', params.entity_type);
+      if (params?.limit !== undefined) sp.set('limit', String(params.limit));
+      if (params?.offset !== undefined) sp.set('offset', String(params.offset));
+      return apiFetch<{ logs: ActivityLog[] }>(`/api/audit-logs?${sp.toString()}`);
+    },
   },
 
   // Vendors
@@ -512,8 +694,9 @@ export const api = {
         vendor: Vendor;
         summary: {
           total_purchases_count: number;
-          total_purchased_amount: number;
+          total_purchase_amount: number;
           total_vat_amount: number;
+          total_amount: number;
           total_paid_amount: number;
           total_unpaid_amount: number;
           pending_vat_bills_count: number;
@@ -532,7 +715,7 @@ export const api = {
         body: JSON.stringify(data),
       }),
     delete: (id: number) =>
-      apiFetch<{ message: string; vendor: Vendor }>(`/api/vendors/${id}`, {
+      apiFetch<{ success?: boolean; message: string; vendor?: Vendor }>(`/api/vendors/${id}`, {
         method: 'DELETE',
       }),
   },
@@ -562,7 +745,7 @@ export const api = {
         body: JSON.stringify(data),
       }),
     delete: (id: number) =>
-      apiFetch<{ message: string; product: Product }>(`/api/products/${id}`, {
+      apiFetch<{ success?: boolean; message: string; product?: Product }>(`/api/products/${id}`, {
         method: 'DELETE',
       }),
   },
@@ -586,10 +769,17 @@ export const api = {
         totalPages: number;
       }>(`/api/purchases?${sp.toString()}`);
     },
-    getVatPending: (params?: { q?: string; vendorId?: number; minDays?: number; maxDays?: number }) => {
+    getVatPending: (params?: {
+      q?: string;
+      vendorId?: number;
+      fiscalYear?: string;
+      minDays?: number;
+      maxDays?: number;
+    }) => {
       const sp = new URLSearchParams();
       if (params?.q) sp.set('q', params.q);
       if (params?.vendorId) sp.set('vendorId', String(params.vendorId));
+      if (params?.fiscalYear) sp.set('fiscalYear', params.fiscalYear);
       if (params?.minDays) sp.set('minDays', String(params.minDays));
       if (params?.maxDays) sp.set('maxDays', String(params.maxDays));
       return apiFetch<{ purchases: Purchase[]; total: number }>(`/api/purchases/vat-pending?${sp.toString()}`);
@@ -605,9 +795,10 @@ export const api = {
     create: (body: FormData | Record<string, any>) => {
       const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
       return apiFetch<{
-        message: string;
+        message?: string;
         purchase: Purchase;
-        items?: PurchaseItem[];
+        items: PurchaseItem[];
+        vat_bills: VatBill[];
         vat_bill?: VatBill | null;
       }>('/api/purchases', {
         method: 'POST',
@@ -623,12 +814,12 @@ export const api = {
       apiFetch<{ message: string; purchase: Purchase }>(`/api/purchases/${id}`, {
         method: 'DELETE',
       }),
-    approve: (id: number, data?: { admin_remarks?: string }) =>
+    approve: (id: number, data?: { admin_remarks?: string; remarks?: string }) =>
       apiFetch<{ message: string; purchase: Purchase }>(`/api/purchases/${id}/approve`, {
         method: 'POST',
         body: JSON.stringify(data || {}),
       }),
-    reject: (id: number, data: { admin_remarks?: string; reason?: string }) =>
+    reject: (id: number, data: { admin_remarks?: string; rejection_reason?: string; reason?: string }) =>
       apiFetch<{ message: string; purchase: Purchase }>(`/api/purchases/${id}/reject`, {
         method: 'POST',
         body: JSON.stringify(data),
@@ -647,12 +838,12 @@ export const api = {
 
   // VAT Bills
   vatBills: {
-    verify: (id: number, data?: { review_notes?: string }) =>
+    verify: (id: number, data?: { review_notes?: string; notes?: string }) =>
       apiFetch<{ message: string; vat_bill: VatBill; purchase?: Purchase }>(`/api/vat-bills/${id}/verify`, {
         method: 'POST',
         body: JSON.stringify(data || {}),
       }),
-    reject: (id: number, data?: { review_notes?: string; reason?: string }) =>
+    reject: (id: number, data?: { review_notes?: string; reason?: string; notes?: string }) =>
       apiFetch<{ message: string; vat_bill: VatBill; purchase?: Purchase }>(`/api/vat-bills/${id}/reject`, {
         method: 'POST',
         body: JSON.stringify(data || {}),
@@ -661,20 +852,18 @@ export const api = {
 
   // Payments
   payments: {
-    getVendorSummary: () =>
-      apiFetch<{
-        summary: {
-          total_vendor_count: number;
-          total_billed_amount: number;
-          total_paid_amount: number;
-          total_unpaid_amount: number;
-        };
-        vendors: any[];
-      }>('/api/payments/vendor-summary'),
+    getVendorSummary: (params?: { vendorId?: number; fromAd?: string; toAd?: string; fiscalYear?: string }) => {
+      const sp = new URLSearchParams();
+      if (params?.vendorId) sp.set('vendorId', String(params.vendorId));
+      if (params?.fromAd) sp.set('fromAd', params.fromAd);
+      if (params?.toAd) sp.set('toAd', params.toAd);
+      if (params?.fiscalYear) sp.set('fiscalYear', params.fiscalYear);
+      return apiFetch<VendorPaymentSummaryResponse>(`/api/payments/vendor-summary?${sp.toString()}`);
+    },
     recordPayment: (purchaseId: number, body: FormData | Record<string, any>) => {
       const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
       return apiFetch<{
-        message: string;
+        message?: string;
         payment: Payment;
         purchase: Purchase;
         slip?: PaymentSlip | null;
@@ -683,8 +872,8 @@ export const api = {
         body: isFormData ? body : JSON.stringify(body),
       });
     },
-    voidPayment: (paymentId: number, data: { reason: string }) =>
-      apiFetch<{ message: string; payment: Payment; purchase: Purchase }>(`/api/payments/${paymentId}/void`, {
+    voidPayment: (paymentId: number, data: { void_reason?: string; voidReason?: string; reason?: string }) =>
+      apiFetch<{ message?: string; payment: Payment; purchase: Purchase }>(`/api/payments/${paymentId}/void`, {
         method: 'POST',
         body: JSON.stringify(data),
       }),
@@ -693,18 +882,7 @@ export const api = {
   // Inventory
   inventory: {
     getDashboard: () =>
-      apiFetch<{
-        kpis: {
-          total_products: number;
-          total_valuation: number;
-          low_stock_count: number;
-          out_of_stock_count: number;
-        };
-        low_stock_products: any[];
-        stock_table: any[];
-        recent_in: any[];
-        recent_out: any[];
-      }>('/api/inventory/dashboard'),
+      apiFetch<InventoryDashboardResponse>('/api/inventory/dashboard'),
     getMovements: (params?: {
       productId?: number;
       movementType?: string;
@@ -723,29 +901,12 @@ export const api = {
         limit: number;
       }>(`/api/inventory/movements?${sp.toString()}`);
     },
-    stockOut: (data: {
-      product_id: number;
-      quantity: number;
-      reason: string;
-      reference_label?: string;
-      movement_date_ad?: string;
-      movement_date_bs?: string;
-      responsible_staff_name: string;
-    }) =>
+    stockOut: (data: StockOutParams) =>
       apiFetch<{ message: string; movement: InventoryMovement }>('/api/inventory/stock-out', {
         method: 'POST',
         body: JSON.stringify(data),
       }),
-    adjustStock: (data: {
-      product_id: number;
-      quantity_delta: number;
-      adjustment_type: 'ADJUSTMENT_ADD' | 'ADJUSTMENT_SUB';
-      reason: string;
-      reference_label?: string;
-      movement_date_ad?: string;
-      movement_date_bs?: string;
-      responsible_staff_name: string;
-    }) =>
+    adjustStock: (data: AdjustmentParams) =>
       apiFetch<{ message: string; movement: InventoryMovement }>('/api/inventory/adjustments', {
         method: 'POST',
         body: JSON.stringify(data),

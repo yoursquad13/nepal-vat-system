@@ -1,7 +1,7 @@
 # Task 9 Completion Report: Frontend Foundation — Design System, Auth, Navigation Shell, BS/AD Picker & Search Modal
 
 **Date:** 2026-11-13  
-**Status:** COMPLETE (Ready for Review)  
+**Status:** COMPLETE (Fix Round 1 Applied & Verified)  
 **Branch:** `feat/nepal-vat-system`
 
 ---
@@ -83,8 +83,8 @@ vite v6.4.6 building for production...
 ✓ 2116 modules transformed.
 dist/index.html                   0.46 kB │ gzip:   0.32 kB
 dist/assets/index-UeJIU1Fh.css   44.75 kB │ gzip:   8.35 kB
-dist/assets/index-B4PCHJJ2.js   341.30 kB │ gzip: 100.70 kB
-✓ built in 693ms
+dist/assets/index-DKti5px-.js   341.89 kB │ gzip: 100.80 kB
+✓ built in 712ms
 ```
 **Result:** Passed with 0 TypeScript and 0 Vite errors.
 
@@ -102,14 +102,59 @@ $ npm --workspace=server test
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 65049.354167
+ℹ duration_ms 65067.12875
 ```
 **Result:** 82 / 82 tests passed with 0 regressions.
 
 ---
 
-## 3. Next Steps (Task 10)
-Task 10 will build upon this foundation to implement:
+## 3. Fix Round 1 Review Findings & Resolution
+
+During the Task 9 code review, an audit of `client/src/api/client.ts` against `server/src/routes/*.ts` identified several specific contract discrepancies. All were addressed and resolved as follows:
+
+1. **`api.inventory.adjustStock` Contract**:
+   - Replaced legacy parameters with camelCase properties matching `adjustmentSchema` in `server/src/routes/inventory.ts`:
+     `{ productId: number; type: 'OPENING_STOCK' | 'ADJUSTMENT_IN' | 'ADJUSTMENT_OUT'; quantity: number; unitCost?: number | null; reason?: string; movementDateAd?: string; movementDateBs?: string; referenceNo?: string | null; remarks?: string | null; allowNegativeOverride?: boolean }`.
+2. **`api.inventory.stockOut` Contract**:
+   - Exported `StockOutReason = 'SOLD' | 'INTERNAL_ISSUE' | 'DAMAGED_EXPIRED' | 'OTHER'`.
+   - Updated parameter type to `{ productId: number; quantity: number; reason: StockOutReason; movementDateAd?: string; movementDateBs?: string; referenceNo?: string | null; remarks?: string | null; allowNegativeOverride?: boolean }` matching `stockOutSchema`.
+3. **`DashboardResponse` Contract**:
+   - Replaced placeholder chart types with exact server types matching `server/src/routes/dashboard.ts`:
+     - `DashboardMonthlySeriesItem`: `bs_year_month`, `label`, `count`, `purchase_amount`, `vat_amount`, `total_amount`, `paid_amount`.
+     - `DashboardVendorWiseItem`: `vendor_id`, `vendor_name`, `count`, `total_amount`, `paid_amount`, `outstanding_amount`.
+     - `DashboardPaidVsUnpaid`: `paid_amount`, `unpaid_amount`, `paid_count`, `partial_count`, `unpaid_count`.
+     - `DashboardVatStatusItem`: `status`, `count`, `vat_amount`, `total_amount`.
+     - `charts: DashboardCharts | null` (nullable for Staff role).
+   - Accurately typed nullable monetary KPIs for Staff and optional `pending_vat_bills` feed.
+4. **`api.payments.getVendorSummary` Contract**:
+   - Updated `VendorPaymentSummaryResponse` to match exact keys returned by `server/src/routes/payments.ts`:
+     - `summary`: `total_purchases`, `total_purchase_amount`, `total_vat_amount`, `total_total_amount`, `total_paid_amount`, `total_unpaid_amount`, `pending_payments_count`, `pending_vat_bills_count`.
+     - `vendors`: Array of rows matching server fields (`vendor_id`, `company_name`, `contact_number`, `pan_number`, `purchases_count`, `purchase_amount`, `vat_amount`, `total_amount`, `paid_amount`, `unpaid_amount`, `pending_vat_bills_count`, `received_vat_bills_count`, `verified_vat_bills_count`).
+     - `unpaid_purchases`: Array of detailed unpaid purchase drilldown items.
+5. **`api.inventory.getDashboard` Contract**:
+   - Corrected `kpis.total_valuation` to `total_inventory_valuation` and added `total_stock_quantity`.
+   - Structured `recent_movements: { in: InventoryMovement[]; out: InventoryMovement[] }` alongside `recent_in` and `recent_out`.
+6. **`api.users` & `User` Model**:
+   - Added dual snake_case (`full_name`, `is_active`) and camelCase (`fullName`, `isActive`) support to `User` interface to satisfy both `auth.ts` and `users.ts` endpoints.
+   - Typed `api.users.create` with `CreateUserInput` (`full_name`, `username`, `email`, `password`, `role`, `phone?`) matching `createUserSchema`.
+   - Typed `api.users.update` with `UpdateUserInput` matching `updateUserSchema`.
+7. **`api.vendors.get` Contract**:
+   - Fixed `summary.total_purchased_amount` to `total_purchase_amount` and included `total_amount`.
+8. **`api.purchases.create` Return Shape**:
+   - Updated return type to `{ message?: string; purchase: Purchase; items: PurchaseItem[]; vat_bills: VatBill[]; vat_bill?: VatBill | null }` matching server 201 response.
+9. **`api.vendors.delete` & `api.products.delete`**:
+   - Updated return types to `{ success?: boolean; message: string; vendor?: Vendor }` and `{ success?: boolean; message: string; product?: Product }`.
+10. **`api.purchases.getVatPending` Parameters**:
+    - Added `fiscalYear?: string` to supported filter query parameters.
+11. **`api.auditLogs.list` Added**:
+    - Added helper calling `GET /api/audit-logs` with `entity_type`, `limit`, `offset` query params.
+12. **Audit of Other Endpoints**:
+    - Verified `api.purchases` (`approve`, `reject`), `api.vatBills` (`verify`, `reject`), and `api.payments` (`recordPayment`, `voidPayment`) parameters against server handlers.
+
+---
+
+## 4. Next Steps (Task 10)
+Task 10 will build upon this completed foundation to implement:
 - Purchase Entry Form (`/purchases/new`) with dynamic multi-product table and live 13% Inclusive/Exclusive VAT calculator.
 - Purchases List & Filtering (`/purchases`).
 - Purchase Detail view (`/purchases/:id`) with Printable Voucher integration.
