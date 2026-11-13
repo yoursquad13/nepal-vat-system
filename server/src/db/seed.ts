@@ -1,29 +1,8 @@
-import crypto from 'node:crypto';
-import { promisify } from 'node:util';
 import pg from 'pg';
 import { env } from '../config/env.js';
+import { hashPassword, verifyPassword } from '../utils/password.js';
 
-const scryptAsync = promisify(crypto.scrypt);
-
-/**
- * Reusable scrypt password hashing function (salt:hash format)
- */
-export async function hashPassword(password: string): Promise<string> {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const derivedKey = (await scryptAsync(password, salt, 64)) as Buffer;
-  return `${salt}:${derivedKey.toString('hex')}`;
-}
-
-/**
- * Verify scrypt password against salt:hash format
- */
-export async function verifyPassword(password: string, combined: string): Promise<boolean> {
-  const [salt, key] = combined.split(':');
-  if (!salt || !key) return false;
-  const keyBuffer = Buffer.from(key, 'hex');
-  const derivedKey = (await scryptAsync(password, salt, 64)) as Buffer;
-  return crypto.timingSafeEqual(keyBuffer, derivedKey);
-}
+export { hashPassword, verifyPassword };
 
 export interface SeedOptions {
   withDemo?: boolean;

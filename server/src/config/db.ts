@@ -1,8 +1,13 @@
 import pg from 'pg';
 import { env } from './env.js';
 
+const connectionString =
+  process.env.NODE_ENV === 'test' && (process.env.TEST_DATABASE_URL || env.TEST_DATABASE_URL)
+    ? (process.env.TEST_DATABASE_URL || env.TEST_DATABASE_URL)
+    : env.DATABASE_URL;
+
 export const pool = new pg.Pool({
-  connectionString: env.DATABASE_URL,
+  connectionString,
 });
 
 pool.on('error', (err) => {
