@@ -70,22 +70,41 @@ backupsRouter.post('/', async (req: Request, res: Response, next: NextFunction) 
 
     if (format === 'sql') {
       const dbUrl = process.env.DATABASE_URL || env.DATABASE_URL;
+      const pgEnv: NodeJS.ProcessEnv = {
+        ...process.env,
+        PATH: `${process.env.PATH}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`,
+      };
+
+      if (dbUrl) {
+        try {
+          const parsed = new URL(dbUrl);
+          if (parsed.hostname) pgEnv.PGHOST = parsed.hostname;
+          if (parsed.port) pgEnv.PGPORT = parsed.port;
+          if (parsed.username) pgEnv.PGUSER = decodeURIComponent(parsed.username);
+          if (parsed.password) pgEnv.PGPASSWORD = decodeURIComponent(parsed.password);
+          const dbName = parsed.pathname.replace(/^\//, '');
+          if (dbName) pgEnv.PGDATABASE = decodeURIComponent(dbName);
+        } catch {
+          // If not a parseable URL, fallback to existing PG environment variables
+        }
+      }
+
       try {
-        // Safe execution without shell interpolation: arguments passed directly to pg_dump
-        await execFileAsync('pg_dump', ['--dbname', dbUrl, '-f', targetPath], {
-          env: {
-            ...process.env,
-            PATH: `${process.env.PATH}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`,
-          },
+        // Safe execution without CLI credentials: connection passed via env, only file path and safety flags on CLI
+        await execFileAsync('pg_dump', ['--no-owner', '--no-privileges', '-f', targetPath], {
+          env: pgEnv,
           timeout: 60000,
         });
       } catch (dumpErr: any) {
+        console.error('pg_dump backup failed:', dumpErr?.code || 'unknown');
         if (dumpErr?.code === 'ENOENT') {
           throw ApiError.internal(
             'pg_dump utility is not available on system PATH. Please ensure PostgreSQL client tools are installed or use JSON format.'
           );
         }
-        throw ApiError.internal(`pg_dump failed: ${dumpErr.message || String(dumpErr)}`);
+        throw ApiError.internal(
+          'Database backup creation failed. Please check server logs or use JSON format.'
+        );
       }
     } else {
       // JSON snapshot of all core relational tables
@@ -186,11 +205,19 @@ backupsRouter.get('/:filename/download', async (req: Request, res: Response, nex
       throw ApiError.notFound(`Backup file not found: ${basename}`);
     }
 
+    const stats = await fs.promises.stat(resolved);
+    if (!stats.isFile()) {
+      throw ApiError.badRequest('Invalid backup file');
+    }
+
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Disposition', `attachment; filename="${basename}"`);
     res.setHeader('Content-Type', basename.endsWith('.sql') ? 'application/sql' : 'application/json');
 
     const stream = fs.createReadStream(resolved);
+    res.on('close', () => {
+      stream.destroy();
+    });
     stream.on('error', (err) => next(err));
     stream.pipe(res);
   } catch (err) {

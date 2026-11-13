@@ -27,15 +27,15 @@ export interface ReportExportData {
  * Sanitize cell values for CSV against formula injection (CSV Injection / CWE-1236).
  * Prepends a single quote (') if string starts with dangerous characters unless strictly numeric.
  */
-function sanitizeCsvValue(val: any): string {
+export function sanitizeCsvValue(val: any): string {
   if (val === null || val === undefined) return '';
   const str = String(val);
 
   // If leading character is =, +, -, @, \t, or \r
   if (/^[=+\-@\t\r]/.test(str)) {
-    // If it's a valid finite number (e.g. -1200.50, +45), it is safe to keep
+    // If it's a valid finite non-empty number (e.g. -1200.50, +45), it is safe to keep
     const trimmed = str.trim();
-    const isNum = !Number.isNaN(Number(trimmed)) && Number.isFinite(Number(trimmed));
+    const isNum = trimmed !== '' && !Number.isNaN(Number(trimmed)) && Number.isFinite(Number(trimmed));
     if (!isNum || trimmed.startsWith('=') || trimmed.startsWith('@')) {
       return `'${str}`;
     }

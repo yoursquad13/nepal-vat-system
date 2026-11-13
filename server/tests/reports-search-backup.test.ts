@@ -19,6 +19,7 @@ process.env.DATABASE_URL = testDbUrl;
 import { runMigrations } from '../src/db/migrate.js';
 import { seedDatabase } from '../src/db/seed.js';
 import { createApp } from '../src/app.js';
+import { sanitizeCsvValue } from '../src/utils/exporters.js';
 
 const testPool = new pg.Pool({ connectionString: testDbUrl });
 const app = createApp();
@@ -166,13 +167,37 @@ test('3. Dashboard: Admin receives full analytics, charts, KPIs, low-stock alert
     .set('Cookie', adminCookie);
   assert.equal(filteredDash.status, 200);
 
-  // Staff accessing dashboard gets 200 with operational KPIs
+  // Staff accessing dashboard gets 200 with role-scoped operational KPIs and charts redacted
   const staffDash = await request(app)
     .get('/api/dashboard')
     .set('Cookie', staffCookie);
   assert.equal(staffDash.status, 200);
-  assert.ok(staffDash.body.kpis, 'Staff dashboard must return kpis');
+  assert.equal(staffDash.body.is_admin, false, 'Staff is_admin flag must be false');
+  assert.equal(staffDash.body.charts, null, 'Staff dashboard must not receive executive charts');
+
+  // Redacted sensitive financial totals for Staff
+  assert.equal(staffDash.body.kpis.total_purchase_amount, null, 'Staff must not receive total_purchase_amount');
+  assert.equal(staffDash.body.kpis.total_vat_amount, null, 'Staff must not receive total_vat_amount');
+  assert.equal(staffDash.body.kpis.total_amount_inc_vat, null, 'Staff must not receive total_amount_inc_vat');
+  assert.equal(staffDash.body.kpis.total_paid_amount, null, 'Staff must not receive total_paid_amount');
+  assert.equal(staffDash.body.kpis.total_outstanding_amount, null, 'Staff must not receive total_outstanding_amount');
+  assert.equal(staffDash.body.kpis.purchases_this_month_amount, null, 'Staff must not receive purchases_this_month_amount');
+  assert.equal(staffDash.body.kpis.total_inventory_valuation, null, 'Staff must not receive total_inventory_valuation');
+
+  // Kept operational metrics for Staff
+  assert.ok(typeof staffDash.body.kpis.total_purchases_count === 'number');
+  assert.ok(typeof staffDash.body.kpis.total_products === 'number');
+  assert.ok(typeof staffDash.body.kpis.my_purchases_count === 'number');
+  assert.ok(typeof staffDash.body.kpis.my_pending_vat_count === 'number');
+
+  // Staff feeds: recent_entries scoped to self, pending_vat_bills present
   assert.ok(Array.isArray(staffDash.body.recent_entries), 'Staff dashboard must return recent_entries');
+  assert.ok(
+    staffDash.body.recent_entries.every((r: any) => r.is_my_entry === true),
+    'Staff recent_entries must only contain their own submissions'
+  );
+  assert.ok(Array.isArray(staffDash.body.pending_vat_bills), 'Staff dashboard must return pending_vat_bills feed');
+  assert.ok(Array.isArray(staffDash.body.low_stock_alerts), 'Staff dashboard must return low_stock_alerts');
 });
 
 test('4. Reports: covers all 15 report types in JSON format', async () => {
@@ -270,6 +295,14 @@ test('5. Reports Export: supports CSV, XLSX, and PDF exports with proper headers
     .get('/api/reports/vat-summary/export?format=docx')
     .set('Cookie', staffCookie);
   assert.equal(invalidFmtRes.status, 400, 'Unsupported format docx must return 400');
+
+  // Verify sanitizeCsvValue neutralizes formula injection and control characters
+  assert.equal(sanitizeCsvValue('=1+1'), "'=1+1");
+  assert.equal(sanitizeCsvValue('@SUM(A1:A10)'), "'@SUM(A1:A10)");
+  assert.equal(sanitizeCsvValue('\t'), "'\t");
+  assert.equal(sanitizeCsvValue('\r'), "'\r");
+  assert.equal(sanitizeCsvValue('-100.50'), '-100.50', 'Valid negative numbers remain unescaped numeric strings');
+  assert.equal(sanitizeCsvValue('+45.00'), '+45.00', 'Valid positive numbers remain unescaped numeric strings');
 });
 
 test('6. Backups: Staff forbidden (403), Admin can list, create JSON & SQL backups, and download safely', async () => {
