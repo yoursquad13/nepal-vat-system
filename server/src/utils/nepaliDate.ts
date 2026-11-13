@@ -4,6 +4,21 @@
  * Covers Bikram Sambat 2000 BS through 2090 BS (1943 AD through 2034 AD).
  */
 
+export const BS_MONTH_NAMES = [
+  'Baisakh',
+  'Jestha',
+  'Ashadh',
+  'Shrawan',
+  'Bhadra',
+  'Ashwin',
+  'Kartik',
+  'Mangsir',
+  'Poush',
+  'Magh',
+  'Falgun',
+  'Chaitra',
+] as const;
+
 export const BS_MONTH_DAYS: Record<number, readonly number[]> = {
   2000: [30, 32, 31, 32, 31, 30, 30, 30, 29, 30, 29, 31],
   2001: [31, 31, 32, 31, 31, 31, 30, 29, 30, 29, 30, 30],

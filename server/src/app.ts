@@ -13,6 +13,10 @@ import { vatBillsRouter } from './routes/vatBills.js';
 import { paymentsRouter } from './routes/payments.js';
 import { filesRouter } from './routes/files.js';
 import { inventoryRouter } from './routes/inventory.js';
+import { dashboardRouter } from './routes/dashboard.js';
+import { searchRouter } from './routes/search.js';
+import { reportsRouter } from './routes/reports.js';
+import { backupsRouter } from './routes/backups.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { ApiError } from './utils/errors.js';
 
@@ -51,6 +55,10 @@ export function createApp(): Express {
   app.use('/api/payments', paymentsRouter);
   app.use('/api/files', filesRouter);
   app.use('/api/inventory', inventoryRouter);
+  app.use('/api/dashboard', dashboardRouter);
+  app.use('/api/search', searchRouter);
+  app.use('/api/reports', reportsRouter);
+  app.use('/api/backups', backupsRouter);
 
   // Catch-all 404 for unmatched /api routes
   app.all('/api/*', (_req, _res, next) => {
