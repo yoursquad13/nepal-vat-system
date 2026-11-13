@@ -14,6 +14,7 @@ import {
 import { logActivity } from '../utils/audit.js';
 import { uploadVatBill } from '../utils/upload.js';
 import { recordPaymentHandler, handlePaymentSlipUpload } from './payments.js';
+import { receivePurchaseStockHandler } from './inventory.js';
 
 export const purchasesRouter = Router();
 
@@ -1559,4 +1560,11 @@ purchasesRouter.post(
   requireAdmin,
   handlePaymentSlipUpload,
   recordPaymentHandler
+);
+
+// POST /api/purchases/:id/receive-stock (Staff or Admin)
+purchasesRouter.post(
+  '/:id/receive-stock',
+  requireAuth,
+  receivePurchaseStockHandler
 );

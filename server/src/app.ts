@@ -12,6 +12,7 @@ import { purchasesRouter } from './routes/purchases.js';
 import { vatBillsRouter } from './routes/vatBills.js';
 import { paymentsRouter } from './routes/payments.js';
 import { filesRouter } from './routes/files.js';
+import { inventoryRouter } from './routes/inventory.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { ApiError } from './utils/errors.js';
 
@@ -49,6 +50,7 @@ export function createApp(): Express {
   app.use('/api/vat-bills', vatBillsRouter);
   app.use('/api/payments', paymentsRouter);
   app.use('/api/files', filesRouter);
+  app.use('/api/inventory', inventoryRouter);
 
   // Catch-all 404 for unmatched /api routes
   app.all('/api/*', (_req, _res, next) => {
