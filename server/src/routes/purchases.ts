@@ -13,6 +13,7 @@ import {
 } from '../utils/nepaliDate.js';
 import { logActivity } from '../utils/audit.js';
 import { uploadVatBill } from '../utils/upload.js';
+import { recordPaymentHandler, handlePaymentSlipUpload } from './payments.js';
 
 export const purchasesRouter = Router();
 
@@ -1550,4 +1551,12 @@ purchasesRouter.post(
       next(err);
     }
   }
+);
+
+// POST /api/purchases/:id/payments (Admin-only)
+purchasesRouter.post(
+  '/:id/payments',
+  requireAdmin,
+  handlePaymentSlipUpload,
+  recordPaymentHandler
 );
