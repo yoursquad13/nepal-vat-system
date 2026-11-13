@@ -239,6 +239,15 @@ test('Admin updates and deactivates Staff user; inactive user cannot log in (403
   const bishal = usersRes.body.users.find((u: any) => u.username === 'bishal_staff');
   assert.ok(bishal, 'bishal_staff user must exist');
 
+  // 1b. No-op PATCH with empty body {} returns 200 and never leaks password_hash
+  const noopRes = await request(app)
+    .patch(`/api/users/${bishal.id}`)
+    .set('Cookie', adminCookie)
+    .send({});
+  assert.strictEqual(noopRes.status, 200);
+  assert.strictEqual(noopRes.body.user.username, 'bishal_staff');
+  assert.strictEqual(noopRes.body.user.password_hash, undefined, 'password_hash must never be leaked on no-op PATCH');
+
   // 2. Admin deactivates bishal_staff
   const deactivateRes = await request(app)
     .patch(`/api/users/${bishal.id}`)
@@ -247,6 +256,7 @@ test('Admin updates and deactivates Staff user; inactive user cannot log in (403
 
   assert.strictEqual(deactivateRes.status, 200);
   assert.strictEqual(deactivateRes.body.user.is_active, false);
+  assert.strictEqual(deactivateRes.body.user.password_hash, undefined, 'password_hash must not be returned');
 
   // 3. Inactive user cannot log in (403 Forbidden)
   const inactiveLogin = await request(app)

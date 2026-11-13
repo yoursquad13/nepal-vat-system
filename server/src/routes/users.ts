@@ -119,7 +119,11 @@ usersRouter.patch(
         throw ApiError.badRequest('Invalid user ID');
       }
 
-      const existRes = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+      const existRes = await pool.query(
+        `SELECT id, full_name, username, email, role, phone, is_active, created_at, updated_at
+         FROM users WHERE id = $1`,
+        [userId]
+      );
       if (existRes.rows.length === 0) {
         throw ApiError.notFound('User not found');
       }
