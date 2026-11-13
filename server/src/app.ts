@@ -6,6 +6,8 @@ import { authRouter } from './routes/auth.js';
 import { usersRouter } from './routes/users.js';
 import { settingsRouter } from './routes/settings.js';
 import { auditLogsRouter } from './routes/auditLogs.js';
+import { vendorsRouter } from './routes/vendors.js';
+import { productsRouter } from './routes/products.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { ApiError } from './utils/errors.js';
 
@@ -37,6 +39,8 @@ export function createApp(): Express {
   app.use('/api/users', usersRouter);
   app.use('/api/settings', settingsRouter);
   app.use('/api/audit-logs', auditLogsRouter);
+  app.use('/api/vendors', vendorsRouter);
+  app.use('/api/products', productsRouter);
 
   // Catch-all 404 for unmatched /api routes
   app.all('/api/*', (_req, _res, next) => {
