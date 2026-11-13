@@ -1,0 +1,17 @@
+{
+  "name": "nepal-vat-vendor-inventory-system",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspaces",
+    "build": "npm run build --workspaces",
+    "start": "npm --workspace=server start",
+    "test": "npm --workspace=server test",
+    "db:migrate": "npm --workspace=server run db:migrate",
+    "db:seed": "npm --workspace=server run db:seed"
+  }
+}

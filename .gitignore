@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+uploads/
+.superpowers/
+*.log
+.DS_Store
