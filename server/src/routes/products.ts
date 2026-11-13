@@ -33,9 +33,6 @@ const updateProductSchema = z.object({
   description: z.string().trim().optional().nullable(),
   unit_of_measurement: z.string().trim().optional(),
   min_stock_level: z.coerce.number().min(0).optional(),
-  current_stock: z.coerce.number().optional(),
-  avg_purchase_price: z.coerce.number().min(0).optional(),
-  latest_purchase_price: z.coerce.number().min(0).optional(),
   is_active: z.boolean().optional(),
 });
 
@@ -331,7 +328,11 @@ productsRouter.patch(
       }
       const oldProduct = existRes.rows[0];
 
-      const { name, sku, category, brand, description, unit_of_measurement, min_stock_level, current_stock, avg_purchase_price, latest_purchase_price, is_active } = req.body;
+      if (req.body.is_active !== undefined && req.user?.role !== 'ADMIN') {
+        throw ApiError.forbidden('Only admins can activate or deactivate records');
+      }
+
+      const { name, sku, category, brand, description, unit_of_measurement, min_stock_level, is_active } = req.body;
 
       // Duplicate SKU check if SKU changed
       if (sku && sku.toLowerCase() !== oldProduct.sku.toLowerCase()) {
@@ -363,20 +364,21 @@ productsRouter.patch(
         description,
         unit_of_measurement,
         min_stock_level,
-        current_stock,
-        avg_purchase_price,
-        latest_purchase_price,
         is_active,
       };
 
       const setClauses: string[] = [];
       const values: any[] = [];
+      const oldValues: Record<string, any> = {};
+      const newValues: Record<string, any> = {};
       let valIdx = 1;
 
       for (const [key, val] of Object.entries(updatableFields)) {
         if (val !== undefined) {
           setClauses.push(`${key} = $${valIdx++}`);
           values.push(val);
+          oldValues[key] = key === 'min_stock_level' && oldProduct[key] !== null ? Number(oldProduct[key]) : oldProduct[key];
+          newValues[key] = val;
         }
       }
 
@@ -406,18 +408,8 @@ productsRouter.patch(
         entityId: Number(updatedProduct.id),
         action,
         summary: `Product ${updatedProduct.name} (${updatedProduct.sku}) ${action.toLowerCase()}d`,
-        oldValues: {
-          name: oldProduct.name,
-          sku: oldProduct.sku,
-          min_stock_level: Number(oldProduct.min_stock_level),
-          is_active: oldProduct.is_active,
-        },
-        newValues: {
-          name: updatedProduct.name,
-          sku: updatedProduct.sku,
-          min_stock_level: Number(updatedProduct.min_stock_level),
-          is_active: updatedProduct.is_active,
-        },
+        oldValues,
+        newValues,
         performedBy: req.user?.id,
         performedByName: req.user?.fullName,
       });

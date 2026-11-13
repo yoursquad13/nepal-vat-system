@@ -404,6 +404,10 @@ vendorsRouter.patch(
       }
       const oldVendor = existRes.rows[0];
 
+      if (req.body.is_active !== undefined && req.user?.role !== 'ADMIN') {
+        throw ApiError.forbidden('Only admins can activate or deactivate records');
+      }
+
       const updatableFields = [
         'company_name',
         'pan_number',
@@ -424,12 +428,16 @@ vendorsRouter.patch(
 
       const setClauses: string[] = [];
       const values: any[] = [];
+      const oldValues: Record<string, any> = {};
+      const newValues: Record<string, any> = {};
       let valIdx = 1;
 
       for (const field of updatableFields) {
         if (req.body[field] !== undefined) {
           setClauses.push(`${field} = $${valIdx++}`);
           values.push(req.body[field]);
+          oldValues[field] = oldVendor[field];
+          newValues[field] = req.body[field];
         }
       }
 
@@ -459,16 +467,8 @@ vendorsRouter.patch(
         entityId: Number(updatedVendor.id),
         action,
         summary: `Vendor ${updatedVendor.company_name} ${action.toLowerCase()}d`,
-        oldValues: {
-          company_name: oldVendor.company_name,
-          contact_number: oldVendor.contact_number,
-          is_active: oldVendor.is_active,
-        },
-        newValues: {
-          company_name: updatedVendor.company_name,
-          contact_number: updatedVendor.contact_number,
-          is_active: updatedVendor.is_active,
-        },
+        oldValues,
+        newValues,
         performedBy: req.user?.id,
         performedByName: req.user?.fullName,
       });

@@ -493,3 +493,195 @@ test('GET /api/products/:id: Returns full profile and complete inventory ledger 
     .set('Cookie', staffCookie);
   assert.strictEqual(notFoundRes.status, 404);
 });
+
+// ==================== ROLE GUARDS & STOCK TAMPERING TESTS ====================
+
+test('Role Guards & Deactivation: Staff cannot deactivate vendors or products via PATCH or DELETE (403); Admin can DELETE (200)', async () => {
+  // 1. Create a vendor for deactivation testing
+  const vRes = await request(app)
+    .post('/api/vendors')
+    .set('Cookie', adminCookie)
+    .send({ company_name: 'Deactivation Guard Vendor Pvt. Ltd.' });
+  assert.strictEqual(vRes.status, 201);
+  const vId = vRes.body.vendor.id;
+
+  // Staff cannot deactivate vendor via PATCH
+  const staffPatchVendor = await request(app)
+    .patch(`/api/vendors/${vId}`)
+    .set('Cookie', staffCookie)
+    .send({ is_active: false });
+  assert.strictEqual(staffPatchVendor.status, 403);
+  assert.strictEqual(staffPatchVendor.body.error, 'Only admins can activate or deactivate records');
+
+  // Staff cannot deactivate vendor via DELETE
+  const staffDeleteVendor = await request(app)
+    .delete(`/api/vendors/${vId}`)
+    .set('Cookie', staffCookie);
+  assert.strictEqual(staffDeleteVendor.status, 403);
+  assert.strictEqual(staffDeleteVendor.body.error, 'Admin access required');
+
+  // Admin can deactivate vendor via DELETE
+  const adminDeleteVendor = await request(app)
+    .delete(`/api/vendors/${vId}`)
+    .set('Cookie', adminCookie);
+  assert.strictEqual(adminDeleteVendor.status, 200);
+  assert.strictEqual(adminDeleteVendor.body.success, true);
+
+  // Verify vendor is deactivated in DB
+  const checkVRes = await testPool.query('SELECT is_active FROM vendors WHERE id = $1', [vId]);
+  assert.strictEqual(checkVRes.rows[0].is_active, false);
+
+  // 2. Create a product for deactivation testing
+  const pRes = await request(app)
+    .post('/api/products')
+    .set('Cookie', adminCookie)
+    .send({
+      name: 'Deactivation Guard Product',
+      sku: 'GUARD-PROD-01',
+      min_stock_level: 5,
+      current_stock: 15,
+    });
+  assert.strictEqual(pRes.status, 201);
+  const pId = pRes.body.product.id;
+
+  // Staff cannot deactivate product via PATCH
+  const staffPatchProduct = await request(app)
+    .patch(`/api/products/${pId}`)
+    .set('Cookie', staffCookie)
+    .send({ is_active: false });
+  assert.strictEqual(staffPatchProduct.status, 403);
+  assert.strictEqual(staffPatchProduct.body.error, 'Only admins can activate or deactivate records');
+
+  // Staff cannot deactivate product via DELETE
+  const staffDeleteProduct = await request(app)
+    .delete(`/api/products/${pId}`)
+    .set('Cookie', staffCookie);
+  assert.strictEqual(staffDeleteProduct.status, 403);
+  assert.strictEqual(staffDeleteProduct.body.error, 'Admin access required');
+
+  // Admin can deactivate product via DELETE
+  const adminDeleteProduct = await request(app)
+    .delete(`/api/products/${pId}`)
+    .set('Cookie', adminCookie);
+  assert.strictEqual(adminDeleteProduct.status, 200);
+  assert.strictEqual(adminDeleteProduct.body.success, true);
+
+  // Verify product is deactivated in DB
+  const checkPRes = await testPool.query('SELECT is_active FROM products WHERE id = $1', [pId]);
+  assert.strictEqual(checkPRes.rows[0].is_active, false);
+});
+
+test('PATCH /api/products/:id ignores direct current_stock / price tampering', async () => {
+  // Create a product with current_stock = 25
+  const createRes = await request(app)
+    .post('/api/products')
+    .set('Cookie', adminCookie)
+    .send({
+      name: 'Stock Integrity Test Product',
+      sku: 'STOCK-INT-001',
+      min_stock_level: 10,
+      current_stock: 25,
+      avg_purchase_price: 500,
+      latest_purchase_price: 500,
+    });
+  assert.strictEqual(createRes.status, 201);
+  const pId = createRes.body.product.id;
+
+  // Attempt to tamper current_stock and valuation via PATCH
+  const patchRes = await request(app)
+    .patch(`/api/products/${pId}`)
+    .set('Cookie', adminCookie)
+    .send({
+      current_stock: 9999,
+      avg_purchase_price: 1,
+      latest_purchase_price: 1,
+      description: 'Attempted stock modification',
+    });
+
+  assert.strictEqual(patchRes.status, 200);
+  assert.strictEqual(patchRes.body.product.description, 'Attempted stock modification');
+  // current_stock must remain 25, NOT 9999
+  assert.strictEqual(Number(patchRes.body.product.current_stock), 25);
+  assert.strictEqual(Number(patchRes.body.product.avg_purchase_price), 500);
+
+  // Double check in database directly
+  const dbCheck = await testPool.query(
+    'SELECT current_stock, avg_purchase_price, latest_purchase_price FROM products WHERE id = $1',
+    [pId]
+  );
+  assert.strictEqual(Number(dbCheck.rows[0].current_stock), 25);
+  assert.strictEqual(Number(dbCheck.rows[0].avg_purchase_price), 500);
+});
+
+test('PATCH records complete dynamic oldValues and newValues in activity_logs', async () => {
+  // 1. Dynamic audit log test for Vendor
+  const vCreate = await request(app)
+    .post('/api/vendors')
+    .set('Cookie', adminCookie)
+    .send({
+      company_name: 'Audit Log Test Vendor',
+      contact_person: 'Old Person',
+      email: 'old@example.com',
+      address: 'Old Address',
+    });
+  const vId = vCreate.body.vendor.id;
+
+  await request(app)
+    .patch(`/api/vendors/${vId}`)
+    .set('Cookie', adminCookie)
+    .send({
+      contact_person: 'New Person',
+      email: 'new@example.com',
+      address: 'New Address',
+    });
+
+  const vAudit = await testPool.query(
+    `SELECT old_values, new_values FROM activity_logs WHERE entity_type = 'VENDOR' AND entity_id = $1 AND action = 'UPDATE' ORDER BY id DESC LIMIT 1`,
+    [vId]
+  );
+  assert.strictEqual(vAudit.rows.length, 1);
+  assert.deepStrictEqual(vAudit.rows[0].old_values, {
+    contact_person: 'Old Person',
+    email: 'old@example.com',
+    address: 'Old Address',
+  });
+  assert.deepStrictEqual(vAudit.rows[0].new_values, {
+    contact_person: 'New Person',
+    email: 'new@example.com',
+    address: 'New Address',
+  });
+
+  // 2. Dynamic audit log test for Product
+  const pCreate = await request(app)
+    .post('/api/products')
+    .set('Cookie', adminCookie)
+    .send({
+      name: 'Audit Log Test Product',
+      sku: 'AUDIT-PROD-01',
+      brand: 'Old Brand',
+      min_stock_level: 10,
+    });
+  const pId = pCreate.body.product.id;
+
+  await request(app)
+    .patch(`/api/products/${pId}`)
+    .set('Cookie', adminCookie)
+    .send({
+      brand: 'New Brand',
+      min_stock_level: 20,
+    });
+
+  const pAudit = await testPool.query(
+    `SELECT old_values, new_values FROM activity_logs WHERE entity_type = 'PRODUCT' AND entity_id = $1 AND action = 'UPDATE' ORDER BY id DESC LIMIT 1`,
+    [pId]
+  );
+  assert.strictEqual(pAudit.rows.length, 1);
+  assert.deepStrictEqual(pAudit.rows[0].old_values, {
+    brand: 'Old Brand',
+    min_stock_level: 10,
+  });
+  assert.deepStrictEqual(pAudit.rows[0].new_values, {
+    brand: 'New Brand',
+    min_stock_level: 20,
+  });
+});
