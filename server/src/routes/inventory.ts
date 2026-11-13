@@ -137,20 +137,25 @@ export async function receivePurchaseStockHandler(
         throw ApiError.badRequest('No line items on this purchase to receive into stock');
       }
 
-      // Check pending unreceived items
-      const pendingItems = items.filter((it: any) => !it.stock_received);
+      // Filter catalog-linked items
+      const linkedItems = items.filter(
+        (it: any) => it.product_id !== null && it.product_id !== undefined
+      );
+      if (linkedItems.length === 0) {
+        throw ApiError.badRequest(
+          'Cannot receive stock: purchase items are not linked to catalog products. Please link items to products first.'
+        );
+      }
+
+      // Check pending unreceived linked items
+      const pendingItems = linkedItems.filter((it: any) => !it.stock_received);
       if (pendingItems.length === 0) {
-        throw ApiError.conflict('All items on this purchase have already been received into stock');
+        throw ApiError.conflict('All linked items on this purchase have already been received into stock');
       }
 
       // 4. Lock products that need stock update in consistent ascending order
       const distinctProductIds = Array.from(
-        new Set(
-          pendingItems
-            .map((it: any) => it.product_id)
-            .filter((pid: any) => pid !== null && pid !== undefined)
-            .map(Number)
-        )
+        new Set(pendingItems.map((it: any) => Number(it.product_id)))
       ).sort((a, b) => a - b);
 
       const productMap = new Map<number, any>();
@@ -161,6 +166,13 @@ export async function receivePurchaseStockHandler(
         );
         for (const p of prodRes.rows) {
           productMap.set(Number(p.id), p);
+        }
+      }
+
+      // Verify all referenced products exist
+      for (const pid of distinctProductIds) {
+        if (!productMap.has(pid)) {
+          throw ApiError.notFound(`Referenced product ID ${pid} not found`);
         }
       }
 
@@ -185,95 +197,90 @@ export async function receivePurchaseStockHandler(
 
       // 5. Process each pending line item
       for (const item of pendingItems) {
-        const pid = item.product_id ? Number(item.product_id) : null;
+        const pid = Number(item.product_id);
+        const prod = productMap.get(pid)!;
         const qty = Number(item.quantity);
         const lineSubtotal = Number(item.line_subtotal);
 
         // VAT-exclusive net unit cost (subtotal / qty)
         const netUnitCost = qty > 0 ? Math.round((lineSubtotal / qty) * 100) / 100 : 0;
+        const oldStock = Number(prod.current_stock);
+        const oldAvg = Number(prod.avg_purchase_price);
 
-        let balanceAfter = 0;
-
-        if (pid && productMap.has(pid)) {
-          const prod = productMap.get(pid);
-          const oldStock = Number(prod.current_stock);
-          const oldAvg = Number(prod.avg_purchase_price);
-
-          // Weighted average price calculation:
-          // If oldStock > 0: ((oldStock * oldAvg) + (qty * netUnitCost)) / (oldStock + qty)
-          // If oldStock <= 0: netUnitCost
-          let newAvg: number;
-          if (oldStock > 0) {
-            newAvg = Math.round((((oldStock * oldAvg) + (qty * netUnitCost)) / (oldStock + qty)) * 100) / 100;
-          } else {
-            newAvg = netUnitCost;
-          }
-
-          const newStock = Math.round((oldStock + qty) * 1000) / 1000;
-          const newPurchasedQty = Math.round((Number(prod.total_purchased_qty) + qty) * 1000) / 1000;
-
-          // Update in-memory product cache for consecutive items
-          prod.current_stock = newStock;
-          prod.avg_purchase_price = newAvg;
-          prod.latest_purchase_price = netUnitCost;
-          prod.total_purchased_qty = newPurchasedQty;
-          balanceAfter = newStock;
-
-          // Update product in database
-          await client.query(
-            `UPDATE products
-             SET current_stock = $1,
-                 avg_purchase_price = $2,
-                 latest_purchase_price = $3,
-                 total_purchased_qty = $4,
-                 updated_at = NOW()
-             WHERE id = $5`,
-            [newStock, newAvg, netUnitCost, newPurchasedQty, pid]
-          );
-
-          // Insert immutable inventory movement record
-          const movRes = await client.query(
-            `INSERT INTO inventory_movements (
-              product_id, purchase_id, purchase_item_id, movement_type, reason, reference_label,
-              qty_in, qty_out, balance_after, unit_cost, movement_date_ad, movement_date_bs,
-              responsible_staff_id, responsible_staff_name, remarks, created_by
-            ) VALUES (
-              $1, $2, $3, 'STOCK_IN', 'PURCHASE_RECEIPT', $4,
-              $5, 0, $6, $7, $8, $9,
-              $10, $11, $12, $13
-            ) RETURNING *`,
-            [
-              pid,
-              purchase.id,
-              item.id,
-              refLabel,
-              qty,
-              balanceAfter,
-              netUnitCost,
-              movementDateAd,
-              movementDateBs,
-              req.user?.id || null,
-              req.user?.fullName || null,
-              body.remarks || null,
-              req.user?.id || null,
-            ]
-          );
-          insertedMovements.push(movRes.rows[0]);
-
-          // Log inventory activity
-          await logActivity(client, {
-            entityType: 'INVENTORY',
-            entityId: pid,
-            action: 'STOCK_IN',
-            summary: `Stock in ${qty} ${item.unit_of_measurement} for ${prod.name} (${prod.sku}) from purchase ${purchase.purchase_code}`,
-            oldValues: { current_stock: oldStock, avg_purchase_price: oldAvg },
-            newValues: { current_stock: newStock, avg_purchase_price: newAvg, latest_purchase_price: netUnitCost },
-            performedBy: req.user?.id,
-            performedByName: req.user?.fullName,
-          });
+        // Weighted average price calculation:
+        // If oldStock > 0: ((oldStock * oldAvg) + (qty * netUnitCost)) / (oldStock + qty)
+        // If oldStock <= 0: netUnitCost
+        let newAvg: number;
+        if (oldStock > 0) {
+          newAvg = Math.round((((oldStock * oldAvg) + (qty * netUnitCost)) / (oldStock + qty)) * 100) / 100;
+        } else {
+          newAvg = netUnitCost;
         }
 
-        // Mark purchase item as stock_received = TRUE
+        const newStock = Math.round((oldStock + qty) * 1000) / 1000;
+        const newPurchasedQty = Math.round((Number(prod.total_purchased_qty) + qty) * 1000) / 1000;
+
+        // Update in-memory product cache for consecutive items
+        prod.current_stock = newStock;
+        prod.avg_purchase_price = newAvg;
+        prod.latest_purchase_price = netUnitCost;
+        prod.total_purchased_qty = newPurchasedQty;
+        const balanceAfter = newStock;
+
+        // Update product in database
+        await client.query(
+          `UPDATE products
+           SET current_stock = $1,
+               avg_purchase_price = $2,
+               latest_purchase_price = $3,
+               total_purchased_qty = $4,
+               updated_at = NOW()
+           WHERE id = $5`,
+          [newStock, newAvg, netUnitCost, newPurchasedQty, pid]
+        );
+
+        // Insert immutable inventory movement record
+        const movRes = await client.query(
+          `INSERT INTO inventory_movements (
+            product_id, purchase_id, purchase_item_id, movement_type, reason, reference_label,
+            qty_in, qty_out, balance_after, unit_cost, movement_date_ad, movement_date_bs,
+            responsible_staff_id, responsible_staff_name, remarks, created_by
+          ) VALUES (
+            $1, $2, $3, 'STOCK_IN', 'PURCHASE_RECEIPT', $4,
+            $5, 0, $6, $7, $8, $9,
+            $10, $11, $12, $13
+          ) RETURNING *`,
+          [
+            pid,
+            purchase.id,
+            item.id,
+            refLabel,
+            qty,
+            balanceAfter,
+            netUnitCost,
+            movementDateAd,
+            movementDateBs,
+            req.user?.id || null,
+            req.user?.fullName || null,
+            body.remarks || null,
+            req.user?.id || null,
+          ]
+        );
+        insertedMovements.push(movRes.rows[0]);
+
+        // Log inventory activity
+        await logActivity(client, {
+          entityType: 'INVENTORY',
+          entityId: pid,
+          action: 'STOCK_IN',
+          summary: `Stock in ${qty} ${item.unit_of_measurement} for ${prod.name} (${prod.sku}) from purchase ${purchase.purchase_code}`,
+          oldValues: { current_stock: oldStock, avg_purchase_price: oldAvg },
+          newValues: { current_stock: newStock, avg_purchase_price: newAvg, latest_purchase_price: netUnitCost },
+          performedBy: req.user?.id,
+          performedByName: req.user?.fullName,
+        });
+
+        // Mark this linked purchase item as stock_received = TRUE
         await client.query(
           `UPDATE purchase_items
            SET stock_received = TRUE,
@@ -825,9 +832,13 @@ inventoryRouter.get(
       const values: any[] = [];
       let valIdx = 1;
 
-      if (productId) {
+      if (productId !== undefined && productId !== null && productId !== '') {
+        const pid = Number(productId);
+        if (!Number.isInteger(pid) || pid <= 0) {
+          throw ApiError.badRequest('Invalid productId filter');
+        }
         conditions.push(`im.product_id = $${valIdx++}`);
-        values.push(Number(productId));
+        values.push(pid);
       }
 
       if (type && typeof type === 'string') {

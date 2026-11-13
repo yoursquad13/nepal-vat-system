@@ -187,6 +187,143 @@ test('Purchase with no line items returns 400/409 on receive-stock', async () =>
   );
 });
 
+test('Approved purchase with ONLY unlinked line item(s) returns 400 Bad Request on receive-stock', async () => {
+  // Staff creates purchase with 1 unlinked line item (product_id is null/omitted)
+  const purRes = await request(app)
+    .post('/api/purchases')
+    .set('Cookie', staffCookie)
+    .send({
+      vendor_id: testVendorId,
+      bill_number: 'BILL-UNLINKED-01',
+      purchase_date_bs: '2083-07-22',
+      product_summary: 'Custom consulting / service fee',
+      tax_type: 'VAT_13',
+      vat_calc_mode: 'EXCLUSIVE',
+      items: [
+        {
+          product_name: 'Custom Electrical Engineering Survey Fee',
+          quantity: 1,
+          unit_of_measurement: 'lot',
+          unit_price: 15000,
+        },
+      ],
+    });
+  assert.equal(purRes.status, 201);
+  const purchaseId = purRes.body.purchase.id;
+
+  // Admin approves purchase
+  const appRes = await request(app)
+    .post(`/api/purchases/${purchaseId}/approve`)
+    .set('Cookie', adminCookie)
+    .send({ admin_remarks: 'Approved consulting fee' });
+  assert.equal(appRes.status, 200);
+
+  // Attempt receive-stock -> 400 Bad Request
+  const recRes = await request(app)
+    .post(`/api/purchases/${purchaseId}/receive-stock`)
+    .set('Cookie', staffCookie)
+    .send({});
+  assert.equal(recRes.status, 400, 'Purchase with only unlinked items must return 400 Bad Request');
+  assert.match(recRes.body.error, /not linked to catalog products/i);
+
+  // Verify item remains stock_received = FALSE and 0 inventory movements
+  const itemsCheck = await testPool.query('SELECT stock_received FROM purchase_items WHERE purchase_id = $1', [purchaseId]);
+  assert.equal(itemsCheck.rows[0].stock_received, false, 'Unlinked item stock_received must stay false');
+
+  const movCount = await testPool.query('SELECT COUNT(*) FROM inventory_movements WHERE purchase_id = $1', [purchaseId]);
+  assert.equal(Number(movCount.rows[0].count), 0, 'No movements must be created for unlinked purchase');
+});
+
+test('Approved mixed purchase (1 linked + 1 unlinked item) receives linked item stock, leaves unlinked item untouched, and is idempotent', async () => {
+  // 1. Create a catalog product
+  const prodRes = await request(app)
+    .post('/api/products')
+    .set('Cookie', adminCookie)
+    .send({
+      name: 'Mixed Test Galvanized Wire',
+      sku: 'SKU-MIXED-WIRE-01',
+      current_stock: 40,
+      avg_purchase_price: 200,
+      unit_of_measurement: 'bundle',
+    });
+  assert.equal(prodRes.status, 201);
+  const productId = prodRes.body.product.id;
+
+  // 2. Staff creates mixed purchase: 1 linked item (Wire) + 1 unlinked item (Delivery / Handling Charge)
+  const purRes = await request(app)
+    .post('/api/purchases')
+    .set('Cookie', staffCookie)
+    .send({
+      vendor_id: testVendorId,
+      bill_number: 'BILL-MIXED-01',
+      purchase_date_bs: '2083-07-23',
+      product_summary: 'Mixed catalog product and freight handling',
+      tax_type: 'VAT_13',
+      vat_calc_mode: 'EXCLUSIVE',
+      items: [
+        {
+          product_id: productId,
+          product_name: 'Mixed Test Galvanized Wire',
+          sku: 'SKU-MIXED-WIRE-01',
+          quantity: 60,
+          unit_of_measurement: 'bundle',
+          unit_price: 250,
+        },
+        {
+          product_name: 'Site Offloading & Crane Handling Fee',
+          quantity: 1,
+          unit_of_measurement: 'trip',
+          unit_price: 3500,
+        },
+      ],
+    });
+  assert.equal(purRes.status, 201);
+  const purchaseId = purRes.body.purchase.id;
+
+  // 3. Admin approves purchase
+  const appRes = await request(app)
+    .post(`/api/purchases/${purchaseId}/approve`)
+    .set('Cookie', adminCookie)
+    .send({ admin_remarks: 'Approved mixed invoice' });
+  assert.equal(appRes.status, 200);
+
+  // 4. First receive-stock call -> 200 OK
+  const recRes = await request(app)
+    .post(`/api/purchases/${purchaseId}/receive-stock`)
+    .set('Cookie', staffCookie)
+    .send({});
+  assert.equal(recRes.status, 200);
+  assert.equal(recRes.body.received_items_count, 1, 'Only 1 linked item received');
+  assert.equal(recRes.body.movements.length, 1, 'Only 1 movement created');
+
+  // Verify stock: 40 + 60 = 100
+  const prodCheck = await testPool.query('SELECT current_stock FROM products WHERE id = $1', [productId]);
+  assert.equal(Number(prodCheck.rows[0].current_stock), 100);
+
+  // Verify purchase_items: linked item is true, unlinked item is false
+  const itemsCheck = await testPool.query(
+    'SELECT product_id, stock_received FROM purchase_items WHERE purchase_id = $1 ORDER BY id ASC',
+    [purchaseId]
+  );
+  assert.equal(itemsCheck.rows.length, 2);
+  assert.equal(itemsCheck.rows[0].stock_received, true, 'Linked item must be received');
+  assert.equal(itemsCheck.rows[1].stock_received, false, 'Unlinked item must remain false');
+
+  // 5. Second receive-stock call -> 409 Conflict
+  const recRes2 = await request(app)
+    .post(`/api/purchases/${purchaseId}/receive-stock`)
+    .set('Cookie', staffCookie)
+    .send({});
+  assert.equal(recRes2.status, 409, 'Subsequent receive-stock call on mixed purchase must return 409 Conflict');
+
+  // Stock and movements remained unchanged
+  const prodCheck2 = await testPool.query('SELECT current_stock FROM products WHERE id = $1', [productId]);
+  assert.equal(Number(prodCheck2.rows[0].current_stock), 100);
+
+  const movCount = await testPool.query('SELECT COUNT(*) FROM inventory_movements WHERE purchase_id = $1', [purchaseId]);
+  assert.equal(Number(movCount.rows[0].count), 1);
+});
+
 test('Approved purchase with VAT BILL PENDING & PAYMENT PENDING receives stock, calculates weighted avg, and is strictly idempotent', async () => {
   // 1. Create a product with initial stock = 50 and avg_purchase_price = 100.00
   const prodRes = await request(app)
@@ -550,4 +687,10 @@ test('GET /api/inventory/movements supports filtering by productId, type, and pa
       assert.equal(m.product_id, firstMov.product_id);
     }
   }
+
+  // 4. Invalid productId filter returns 400 Bad Request
+  const invalidRes = await request(app)
+    .get('/api/inventory/movements?productId=abc')
+    .set('Cookie', staffCookie);
+  assert.equal(invalidRes.status, 400, 'Invalid productId filter must return 400 Bad Request');
 });
