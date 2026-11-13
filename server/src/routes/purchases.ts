@@ -674,6 +674,9 @@ purchasesRouter.post(
       const result = await withTransaction(async (client) => {
         // Sequential purchase_code generation: PUR-YYYY-XXXX based on BS year
         const bsYear = purchaseDateBs.split('-')[0];
+        // Concurrency-safe advisory transaction lock by BS year
+        await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`purchase_code_${bsYear}`]);
+
         const prefix = `PUR-${bsYear}-%`;
 
         const seqRes = await client.query(
@@ -921,6 +924,23 @@ purchasesRouter.patch(
           }
         }
 
+        // Vendor update (if not financially locked)
+        let vendorId = current.vendor_id;
+        if (!isFinanciallyLocked && (body.vendor_id !== undefined || body.vendorId !== undefined)) {
+          const newVendorId = Number(body.vendor_id ?? body.vendorId);
+          if (Number.isNaN(newVendorId) || newVendorId <= 0) {
+            throw ApiError.badRequest('Invalid vendor_id');
+          }
+          const vCheck = await client.query(
+            'SELECT id FROM vendors WHERE id = $1 AND is_active = TRUE',
+            [newVendorId]
+          );
+          if (vCheck.rows.length === 0) {
+            throw ApiError.badRequest('Referenced vendor does not exist or is inactive');
+          }
+          vendorId = newVendorId;
+        }
+
         // Bill number duplicate check if modified
         const newBillNumber = body.bill_number !== undefined || body.billNumber !== undefined
           ? (body.bill_number ?? body.billNumber)?.trim() || null
@@ -928,12 +948,12 @@ purchasesRouter.patch(
 
         if (
           newBillNumber &&
-          newBillNumber.toLowerCase() !== (current.bill_number || '').toLowerCase()
+          (vendorId !== current.vendor_id || newBillNumber.toLowerCase() !== (current.bill_number || '').toLowerCase())
         ) {
           const dupCheck = await client.query(
             `SELECT id FROM purchases
              WHERE vendor_id = $1 AND LOWER(bill_number) = LOWER($2) AND id <> $3 AND is_deleted = FALSE`,
-            [current.vendor_id, newBillNumber, id]
+            [vendorId, newBillNumber, id]
           );
           if (dupCheck.rows.length > 0) {
             throw ApiError.conflict('A purchase with this vendor and bill number already exists');
@@ -1060,34 +1080,81 @@ purchasesRouter.patch(
               ]
             );
           }
+
+          // Recalculate header totals when items are patched without explicit entered_amount
+          if (
+            !isFinanciallyLocked &&
+            body.entered_amount === undefined &&
+            body.enteredAmount === undefined &&
+            body.items.length > 0
+          ) {
+            const allItemsRes = await client.query(
+              'SELECT line_subtotal, line_vat_amount, line_total FROM purchase_items WHERE purchase_id = $1',
+              [id]
+            );
+            const totalSubtotalPaisa = allItemsRes.rows.reduce(
+              (acc, it) => acc + toPaisa(it.line_subtotal),
+              0
+            );
+            const totalVatPaisa = allItemsRes.rows.reduce(
+              (acc, it) => acc + toPaisa(it.line_vat_amount),
+              0
+            );
+            const totalTotalPaisa = allItemsRes.rows.reduce(
+              (acc, it) => acc + toPaisa(it.line_total),
+              0
+            );
+            purchaseAmount = Number(fromPaisa(totalSubtotalPaisa));
+            vatAmount = Number(fromPaisa(totalVatPaisa));
+            totalAmount = Number(fromPaisa(totalTotalPaisa));
+            enteredAmount = vatCalcMode === 'INCLUSIVE' ? totalAmount : purchaseAmount;
+          }
         }
 
         const productSummary = (body.product_summary ?? body.productSummary)?.trim() || current.product_summary;
         const description = body.description !== undefined ? body.description?.trim() || null : current.description;
         const remarks = body.remarks !== undefined ? body.remarks?.trim() || null : current.remarks;
 
+        // Reset review_status when a rejected purchase is edited
+        let reviewStatus = current.review_status;
+        let paymentStatus = current.payment_status;
+        let rejectionReason = current.rejection_reason;
+
+        if (current.review_status === 'REJECTED') {
+          reviewStatus = 'PENDING_REVIEW';
+          if (Number(current.paid_amount) === 0) {
+            paymentStatus = 'PAYMENT PENDING';
+          }
+          rejectionReason = null;
+        }
+
         // Execute update on purchases (NEVER update entry_at, entry_date_ad, entry_time_npt, entry_date_bs)
         const updatePurRes = await client.query(
           `UPDATE purchases
-           SET product_summary = $1,
-               description = $2,
-               remarks = $3,
-               bill_number = $4,
-               purchase_date_ad = $5,
-               purchase_date_bs = $6,
-               fiscal_year = $7,
-               vat_bill_date_ad = $8,
-               vat_bill_date_bs = $9,
-               tax_type = $10,
-               vat_calc_mode = $11,
-               entered_amount = $12,
-               purchase_amount = $13,
-               vat_amount = $14,
-               total_amount = $15,
+           SET vendor_id = $1,
+               product_summary = $2,
+               description = $3,
+               remarks = $4,
+               bill_number = $5,
+               purchase_date_ad = $6,
+               purchase_date_bs = $7,
+               fiscal_year = $8,
+               vat_bill_date_ad = $9,
+               vat_bill_date_bs = $10,
+               tax_type = $11,
+               vat_calc_mode = $12,
+               entered_amount = $13,
+               purchase_amount = $14,
+               vat_amount = $15,
+               total_amount = $16,
+               review_status = $17,
+               payment_status = $18,
+               rejection_reason = $19,
                updated_at = NOW()
-           WHERE id = $16
+           WHERE id = $20
            RETURNING *`,
           [
+            vendorId,
             productSummary,
             description,
             remarks,
@@ -1103,6 +1170,9 @@ purchasesRouter.patch(
             purchaseAmount,
             vatAmount,
             totalAmount,
+            reviewStatus,
+            paymentStatus,
+            rejectionReason,
             id,
           ]
         );
@@ -1312,6 +1382,18 @@ purchasesRouter.post(
 
         if (Number(current.paid_amount) > 0) {
           throw ApiError.conflict('Cannot reject purchase that already has payments recorded');
+        }
+
+        const stockReceivedCheck = await client.query(
+          'SELECT COUNT(*) FROM purchase_items WHERE purchase_id = $1 AND stock_received = TRUE',
+          [id]
+        );
+        const stockMovementCheck = await client.query(
+          "SELECT COUNT(*) FROM inventory_movements WHERE purchase_id = $1 AND movement_type = 'STOCK_IN'",
+          [id]
+        );
+        if (Number(stockReceivedCheck.rows[0].count) > 0 || Number(stockMovementCheck.rows[0].count) > 0) {
+          throw ApiError.conflict('Cannot reject a purchase that already has received stock');
         }
 
         const updatedRes = await client.query(

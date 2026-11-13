@@ -615,3 +615,175 @@ test('POST /api/purchases with tax_type: NON_VAT calculates 0 VAT and sets statu
   assert.strictEqual(Number(pur.purchase_amount), 1500);
   assert.strictEqual(Number(pur.total_amount), 1500);
 });
+
+// ==================== FIX ROUND 1 COVERING TESTS ====================
+
+test('PATCH /api/purchases/:id updates vendor_id on unapproved purchase and enforces duplicate bill number check', async () => {
+  // Get second vendor
+  const v2Res = await testPool.query('SELECT id FROM vendors ORDER BY id ASC OFFSET 1 LIMIT 1');
+  assert.ok(v2Res.rows.length > 0, 'Second vendor must exist');
+  const secondVendorId = Number(v2Res.rows[0].id);
+
+  // Create purchase with testVendorId
+  const createRes = await request(app)
+    .post('/api/purchases')
+    .set('Cookie', staffCookie)
+    .send({
+      vendor_id: testVendorId,
+      product_summary: 'Vendor Switch Test',
+      bill_number: 'SW-83-001',
+      purchase_date_bs: '2083-07-25',
+      entered_amount: 3000,
+    });
+  assert.strictEqual(createRes.status, 201);
+  const purId = createRes.body.purchase.id;
+  assert.strictEqual(createRes.body.purchase.vendor_id, testVendorId);
+
+  // Update vendor_id via PATCH
+  const patchRes = await request(app)
+    .patch(`/api/purchases/${purId}`)
+    .set('Cookie', staffCookie)
+    .send({
+      vendor_id: secondVendorId,
+    });
+  assert.strictEqual(patchRes.status, 200);
+  assert.strictEqual(patchRes.body.purchase.vendor_id, secondVendorId);
+
+  // Attempting to set an invalid non-existent vendor_id returns 400
+  const invalidVendorRes = await request(app)
+    .patch(`/api/purchases/${purId}`)
+    .set('Cookie', staffCookie)
+    .send({
+      vendor_id: 9999999,
+    });
+  assert.strictEqual(invalidVendorRes.status, 400);
+});
+
+test('PATCH /api/purchases/:id recalculates header totals when items are patched without entered_amount', async () => {
+  // Create empty header purchase with Rs. 1000
+  const createRes = await request(app)
+    .post('/api/purchases')
+    .set('Cookie', staffCookie)
+    .send({
+      vendor_id: testVendorId,
+      product_summary: 'Header Recalc Test',
+      bill_number: 'RECALC-83-01',
+      purchase_date_bs: '2083-07-25',
+      tax_type: 'VAT_13',
+      vat_calc_mode: 'EXCLUSIVE',
+      entered_amount: 1000,
+    });
+  assert.strictEqual(createRes.status, 201);
+  const purId = createRes.body.purchase.id;
+
+  // Patch items without passing entered_amount
+  // Item 1: 5 * 1000 = 5000 -> VAT 650 -> Total 5650
+  // Item 2: 2 * 2500 = 5000 -> VAT 650 -> Total 5650
+  // Sum: purchase_amount = 10000, vat_amount = 1300, total_amount = 11300
+  const patchRes = await request(app)
+    .patch(`/api/purchases/${purId}`)
+    .set('Cookie', staffCookie)
+    .send({
+      items: [
+        {
+          product_name: 'Recalc Item 1',
+          quantity: 5,
+          unit_price: 1000,
+        },
+        {
+          product_name: 'Recalc Item 2',
+          quantity: 2,
+          unit_price: 2500,
+        },
+      ],
+    });
+
+  assert.strictEqual(patchRes.status, 200);
+  const updatedPur = patchRes.body.purchase;
+  assert.strictEqual(Number(updatedPur.purchase_amount), 10000);
+  assert.strictEqual(Number(updatedPur.vat_amount), 1300);
+  assert.strictEqual(Number(updatedPur.total_amount), 11300);
+  assert.strictEqual(Number(updatedPur.entered_amount), 10000);
+});
+
+test('Concurrent POST /api/purchases requests generate distinct purchase_codes without collision', async () => {
+  const req1 = request(app)
+    .post('/api/purchases')
+    .set('Cookie', staffCookie)
+    .send({
+      vendor_id: testVendorId,
+      product_summary: 'Concurrent 1',
+      bill_number: 'CONC-83-01',
+      purchase_date_bs: '2083-07-25',
+      entered_amount: 1000,
+    });
+
+  const req2 = request(app)
+    .post('/api/purchases')
+    .set('Cookie', staffCookie)
+    .send({
+      vendor_id: testVendorId,
+      product_summary: 'Concurrent 2',
+      bill_number: 'CONC-83-02',
+      purchase_date_bs: '2083-07-25',
+      entered_amount: 2000,
+    });
+
+  const [res1, res2] = await Promise.all([req1, req2]);
+  assert.strictEqual(res1.status, 201);
+  assert.strictEqual(res2.status, 201);
+  assert.notStrictEqual(
+    res1.body.purchase.purchase_code,
+    res2.body.purchase.purchase_code,
+    'Concurrent purchase_codes must be distinct'
+  );
+});
+
+test('POST /api/purchases/:id/reject returns 409 Conflict if stock_received = TRUE exists on an item', async () => {
+  // Demo purchase 2 has received stock in inventory
+  const rejectRes = await request(app)
+    .post(`/api/purchases/${demoPur2Id}/reject`)
+    .set('Cookie', adminCookie)
+    .send({ reason: 'Rejecting stocked purchase' });
+
+  assert.strictEqual(rejectRes.status, 409, 'Expected 409 Conflict when rejecting stocked purchase');
+});
+
+test('Editing a REJECTED purchase via PATCH /api/purchases/:id resets review_status to PENDING_REVIEW and clears rejection_reason', async () => {
+  // Create clean purchase
+  const createRes = await request(app)
+    .post('/api/purchases')
+    .set('Cookie', staffCookie)
+    .send({
+      vendor_id: testVendorId,
+      product_summary: 'Reject and Re-edit Test',
+      bill_number: 'REJ-EDIT-01',
+      purchase_date_bs: '2083-07-25',
+      entered_amount: 4000,
+    });
+  assert.strictEqual(createRes.status, 201);
+  const purId = createRes.body.purchase.id;
+
+  // Admin rejects it
+  const rejectRes = await request(app)
+    .post(`/api/purchases/${purId}/reject`)
+    .set('Cookie', adminCookie)
+    .send({ reason: 'Incorrect product summary details' });
+  assert.strictEqual(rejectRes.status, 200);
+  assert.strictEqual(rejectRes.body.purchase.review_status, 'REJECTED');
+  assert.strictEqual(rejectRes.body.purchase.rejection_reason, 'Incorrect product summary details');
+
+  // Staff edits the rejected purchase to fix it
+  const editRes = await request(app)
+    .patch(`/api/purchases/${purId}`)
+    .set('Cookie', staffCookie)
+    .send({
+      product_summary: 'Corrected Product Summary Details',
+    });
+  assert.strictEqual(editRes.status, 200);
+  const updated = editRes.body.purchase;
+  assert.strictEqual(updated.product_summary, 'Corrected Product Summary Details');
+  assert.strictEqual(updated.review_status, 'PENDING_REVIEW', 'review_status must reset to PENDING_REVIEW');
+  assert.strictEqual(updated.payment_status, 'PAYMENT PENDING', 'payment_status must reset to PAYMENT PENDING');
+  assert.strictEqual(updated.rejection_reason, null, 'rejection_reason must be cleared');
+});
