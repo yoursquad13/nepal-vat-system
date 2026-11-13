@@ -1,6 +1,10 @@
 import pg from 'pg';
 import { env } from './env.js';
 
+// Force node-pg to return DATE columns (OID 1082) as raw 'YYYY-MM-DD' strings
+// to avoid local/UTC timezone day-shifting.
+pg.types.setTypeParser(1082, (val: string) => val);
+
 const connectionString =
   process.env.NODE_ENV === 'test' && (process.env.TEST_DATABASE_URL || env.TEST_DATABASE_URL)
     ? (process.env.TEST_DATABASE_URL || env.TEST_DATABASE_URL)

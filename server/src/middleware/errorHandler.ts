@@ -28,6 +28,16 @@ export function errorHandler(
     return;
   }
 
+  // Multer file upload errors
+  if (err?.name === 'MulterError') {
+    const isSize = err.code === 'LIMIT_FILE_SIZE' || err.message === 'File too large';
+    res.status(400).json({
+      error: isSize ? 'File size exceeds maximum limit of 10MB' : err.message,
+      code: err.code,
+    });
+    return;
+  }
+
   // Postgres unique constraint violation
   if (err?.code === '23505') {
     res.status(409).json({

@@ -8,6 +8,9 @@ import { settingsRouter } from './routes/settings.js';
 import { auditLogsRouter } from './routes/auditLogs.js';
 import { vendorsRouter } from './routes/vendors.js';
 import { productsRouter } from './routes/products.js';
+import { purchasesRouter } from './routes/purchases.js';
+import { vatBillsRouter } from './routes/vatBills.js';
+import { filesRouter } from './routes/files.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { ApiError } from './utils/errors.js';
 
@@ -41,6 +44,9 @@ export function createApp(): Express {
   app.use('/api/audit-logs', auditLogsRouter);
   app.use('/api/vendors', vendorsRouter);
   app.use('/api/products', productsRouter);
+  app.use('/api/purchases', purchasesRouter);
+  app.use('/api/vat-bills', vatBillsRouter);
+  app.use('/api/files', filesRouter);
 
   // Catch-all 404 for unmatched /api routes
   app.all('/api/*', (_req, _res, next) => {
