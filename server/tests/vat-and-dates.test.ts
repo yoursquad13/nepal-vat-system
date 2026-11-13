@@ -35,6 +35,8 @@ test('fromPaisa formats integer paisa to 2-decimal string', () => {
   assert.strictEqual(fromPaisa(10000), '100.00');
   assert.strictEqual(fromPaisa(10000000), '100000.00');
   assert.strictEqual(fromPaisa(1150), '11.50');
+  assert.strictEqual(fromPaisa(1150.44), '11.50');
+  assert.strictEqual(fromPaisa(-1150.44), '-11.50');
   assert.strictEqual(fromPaisa(0), '0.00');
   assert.strictEqual(fromPaisa(-5025), '-50.25');
   assert.strictEqual(fromPaisa(5), '0.05');

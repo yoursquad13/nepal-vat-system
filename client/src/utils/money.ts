@@ -50,7 +50,7 @@ export function fromPaisa(paisa: number): string {
     return '0.00';
   }
   const isNegative = paisa < 0;
-  const absPaisa = Math.abs(paisa);
+  const absPaisa = Math.round(Math.abs(paisa));
   const rupees = Math.floor(absPaisa / 100);
   const remPaisa = absPaisa % 100;
   const formatted = `${rupees}.${remPaisa.toString().padStart(2, '0')}`;
