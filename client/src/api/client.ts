@@ -290,6 +290,7 @@ export interface Purchase {
   tax_type: TaxType;
   vat_calc_mode: VatCalcMode;
   entered_amount: number;
+  discount_amount?: number;
   purchase_amount: number;
   vat_amount: number;
   total_amount: number;
@@ -347,6 +348,9 @@ export interface ExtractedBillData {
   product_summary: string;
   description: string | null;
   remarks: string | null;
+  subtotal_before_discount: number | null;
+  discount_amount: number;
+  discount_percent: number | null;
   taxable_amount: number | null;
   vat_amount: number | null;
   total_amount: number | null;

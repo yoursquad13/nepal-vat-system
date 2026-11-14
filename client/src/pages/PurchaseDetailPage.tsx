@@ -322,6 +322,11 @@ export function PurchaseDetailPage() {
             <p className="text-lg font-bold text-slate-900 tabular-nums mt-0.5">
               {formatNpr(purchase.purchase_amount)}
             </p>
+            {Number(purchase.discount_amount || 0) > 0 && (
+              <p className="text-[11px] text-amber-700 mt-0.5 tabular-nums">
+                Discount Applied: - {formatNpr(purchase.discount_amount || 0)}
+              </p>
+            )}
           </div>
 
           <div>

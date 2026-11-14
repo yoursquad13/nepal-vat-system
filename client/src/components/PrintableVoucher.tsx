@@ -231,6 +231,24 @@ export function PrintableVoucher({
           </div>
 
           <div className="border border-slate-300 rounded overflow-hidden text-xs">
+            {Number(purchase.discount_amount || 0) > 0 && (
+              <>
+                <div className="flex justify-between px-3 py-1.5 border-b border-slate-200 tabular-nums">
+                  <span className="text-slate-600">
+                    {purchase.vat_calc_mode === 'INCLUSIVE' && purchase.tax_type === 'VAT_13'
+                      ? 'Subtotal Before Discount (Incl. VAT):'
+                      : 'Subtotal Before Discount:'}
+                  </span>
+                  <span className="font-medium">
+                    {formatNpr(Number(purchase.entered_amount) + Number(purchase.discount_amount || 0))}
+                  </span>
+                </div>
+                <div className="flex justify-between px-3 py-1.5 border-b border-slate-200 tabular-nums text-amber-800">
+                  <span>Less: Discount:</span>
+                  <span className="font-medium">- {formatNpr(purchase.discount_amount || 0)}</span>
+                </div>
+              </>
+            )}
             <div className="flex justify-between px-3 py-1.5 border-b border-slate-200 tabular-nums">
               <span className="text-slate-600">Taxable / Base Amount:</span>
               <span className="font-medium">{formatNpr(purchase.purchase_amount)}</span>

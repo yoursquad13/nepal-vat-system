@@ -45,6 +45,9 @@ export interface ExtractedBillData {
   taxable_amount: number | null;
   vat_amount: number | null;
   total_amount: number | null;
+  subtotal_before_discount: number | null;
+  discount_amount: number;
+  discount_percent: number | null;
   entered_amount: number | null;
   line_items: ExtractedLineItem[];
   notes: string | null;
@@ -238,28 +241,56 @@ export function normalizeExtractedBill(raw: any): {
         .filter((x: ExtractedLineItem | null): x is ExtractedLineItem => x !== null)
     : [];
 
+  let subtotalBeforeDiscount = toFiniteNumber(raw?.subtotal_before_discount);
+  let discountAmount = toFiniteNumber(raw?.discount_amount);
+  let discountPercent = toFiniteNumber(raw?.discount_percent);
   let taxableAmount = toFiniteNumber(raw?.taxable_amount);
   let vatAmount = toFiniteNumber(raw?.vat_amount);
   let totalAmount = toFiniteNumber(raw?.total_amount);
 
-  if (taxType === 'VAT_13' && vatCalcMode === 'INCLUSIVE' && totalAmount !== null) {
+  const lineSum = lineItems.reduce((sum, item) => sum + item.line_total, 0);
+  if (subtotalBeforeDiscount === null && lineSum > 0) {
+    subtotalBeforeDiscount = roundMoney(lineSum);
+  }
+
+  if (discountAmount === null && discountPercent !== null && discountPercent > 0 && subtotalBeforeDiscount && subtotalBeforeDiscount > 0) {
+    discountAmount = roundMoney((subtotalBeforeDiscount * discountPercent) / 100);
+  }
+  const normalizedDiscountAmount = discountAmount !== null && discountAmount > 0 ? roundMoney(discountAmount) : 0;
+
+  if (
+    discountPercent === null &&
+    normalizedDiscountAmount > 0 &&
+    subtotalBeforeDiscount &&
+    subtotalBeforeDiscount > 0
+  ) {
+    discountPercent = roundMoney((normalizedDiscountAmount / subtotalBeforeDiscount) * 100);
+  }
+
+  if (taxType === 'VAT_13' && vatCalcMode === 'EXCLUSIVE') {
+    if (taxableAmount === null && subtotalBeforeDiscount !== null) {
+      taxableAmount = roundMoney(Math.max(0, subtotalBeforeDiscount - normalizedDiscountAmount));
+    }
+  } else if (taxType === 'VAT_13' && vatCalcMode === 'INCLUSIVE' && totalAmount !== null) {
     if (vatAmount === null) vatAmount = roundMoney((totalAmount * 13) / 113);
     if (taxableAmount === null) taxableAmount = roundMoney(totalAmount - vatAmount);
   } else if (taxType === 'NON_VAT') {
     vatAmount = 0;
     if (totalAmount !== null && taxableAmount === null) {
       taxableAmount = totalAmount;
+    } else if (taxableAmount === null && subtotalBeforeDiscount !== null) {
+      taxableAmount = roundMoney(Math.max(0, subtotalBeforeDiscount - normalizedDiscountAmount));
     }
   }
 
-  const lineSum = lineItems.reduce((sum, item) => sum + item.line_total, 0);
+  const netFromLines = lineSum > 0 ? Math.max(0, lineSum - normalizedDiscountAmount) : 0;
   let enteredAmount: number | null = null;
   if (taxType === 'VAT_13' && vatCalcMode === 'EXCLUSIVE') {
     enteredAmount =
       taxableAmount !== null && taxableAmount > 0
         ? roundMoney(taxableAmount)
-        : lineSum > 0
-        ? roundMoney(lineSum)
+        : netFromLines > 0
+        ? roundMoney(netFromLines)
         : totalAmount !== null && totalAmount > 0
         ? roundMoney(totalAmount / 1.13)
         : null;
@@ -267,8 +298,8 @@ export function normalizeExtractedBill(raw: any): {
     enteredAmount =
       totalAmount !== null && totalAmount > 0
         ? roundMoney(totalAmount)
-        : lineSum > 0
-        ? roundMoney(lineSum)
+        : netFromLines > 0
+        ? roundMoney(netFromLines)
         : taxableAmount !== null && taxableAmount > 0
         ? roundMoney(taxableAmount)
         : null;
@@ -318,6 +349,10 @@ export function normalizeExtractedBill(raw: any): {
       taxable_amount: taxableAmount !== null ? roundMoney(taxableAmount) : null,
       vat_amount: vatAmount !== null ? roundMoney(vatAmount) : null,
       total_amount: totalAmount !== null ? roundMoney(totalAmount) : null,
+      subtotal_before_discount:
+        subtotalBeforeDiscount !== null ? roundMoney(subtotalBeforeDiscount) : null,
+      discount_amount: normalizedDiscountAmount,
+      discount_percent: discountPercent !== null ? roundMoney(discountPercent) : null,
       entered_amount: enteredAmount,
       line_items: lineItems,
       notes,
@@ -416,7 +451,8 @@ Extraction Rules:
 5. If vendor name or item names are in Devanagari (Nepali), provide both the clean readable original or bilingual form AND English transliteration (vendor.name_english; for items, format as "Nepali (English)" or clear English/Nepali).
 6. Normalize Bikram Sambat dates (e.g., 2083/07/15, 2083.07.09, २०८३/०७/२७) into YYYY-MM-DD in purchase_date_bs. If only Gregorian AD date is shown, put YYYY-MM-DD in purchase_date_ad.
 7. Extract all line items accurately with quantity, unit (e.g., pcs, ctn, kg, pkt, box), rate (unit_price), and line total.
-8. Fill description with a clean summary of bill particulars and payment_mode (Cash/Cheque/Credit) if indicated.`;
+8. Extract discounts when present (Sub Total / Total Amount before discount in subtotal_before_discount, Discount / छुट / % Discount Rs. value in discount_amount, and percentage in discount_percent if explicitly printed or derivable). Verify arithmetic across handwritten digits: Qty * Rate = Line Total, subtotal_before_discount - discount_amount = taxable_amount, and taxable_amount + 13% VAT = total_amount.
+9. Fill description with a clean summary of bill particulars and payment_mode (Cash/Cheque/Credit) if indicated.`;
 
 const GEMINI_RESPONSE_SCHEMA = {
   type: 'OBJECT',
@@ -448,6 +484,9 @@ const GEMINI_RESPONSE_SCHEMA = {
     payment_mode: { type: 'STRING', nullable: true },
     product_summary: { type: 'STRING' },
     description: { type: 'STRING', nullable: true },
+    subtotal_before_discount: { type: 'NUMBER', nullable: true },
+    discount_amount: { type: 'NUMBER', nullable: true },
+    discount_percent: { type: 'NUMBER', nullable: true },
     taxable_amount: { type: 'NUMBER', nullable: true },
     vat_amount: { type: 'NUMBER', nullable: true },
     total_amount: { type: 'NUMBER', nullable: true },

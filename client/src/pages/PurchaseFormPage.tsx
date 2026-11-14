@@ -28,7 +28,7 @@ import {
 } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
-import { calculateVat, formatNpr } from '../utils/money';
+import { calculateVat, calculateDiscountedPurchase, formatNpr } from '../utils/money';
 import { getNowNpt } from '../utils/nepaliDate';
 import { BsAdDatePicker, BsAdDateValue } from '../components/BsAdDatePicker';
 import {
@@ -118,8 +118,10 @@ export function PurchaseFormPage() {
   const [taxType, setTaxType] = useState<TaxType>('VAT_13');
   const [vatCalcMode, setVatCalcMode] = useState<VatCalcMode>('EXCLUSIVE');
 
-  // Entered amount (for quick entry without line items)
+  // Entered amount (for quick entry without line items) & Bill Discount
   const [enteredAmount, setEnteredAmount] = useState<string>('');
+  const [discountAmount, setDiscountAmount] = useState<string>('');
+  const [discountPercent, setDiscountPercent] = useState<string>('');
 
   // Line items
   const [useLineItems, setUseLineItems] = useState<boolean>(false);
@@ -183,6 +185,9 @@ export function PurchaseFormPage() {
         }
 
         const items = res.items || [];
+        const savedDiscount = Number(pur.discount_amount || 0);
+        setDiscountAmount(savedDiscount > 0 ? String(savedDiscount) : '');
+
         if (items.length > 0) {
           setUseLineItems(true);
           setLineItems(
@@ -200,8 +205,19 @@ export function PurchaseFormPage() {
               line_total: it.line_total,
             }))
           );
+          const grossItems = items.reduce(
+            (acc, it) => acc + (Number(it.quantity) || 0) * (Number(it.unit_price) || 0),
+            0
+          );
+          setDiscountPercent(
+            savedDiscount > 0 && grossItems > 0 ? ((savedDiscount / grossItems) * 100).toFixed(2) : ''
+          );
         } else {
-          setEnteredAmount(String(pur.entered_amount || pur.total_amount));
+          const grossSingle = Number(pur.entered_amount || pur.total_amount || 0) + savedDiscount;
+          setEnteredAmount(String(Number(grossSingle.toFixed(2))));
+          setDiscountPercent(
+            savedDiscount > 0 && grossSingle > 0 ? ((savedDiscount / grossSingle) * 100).toFixed(2) : ''
+          );
         }
 
         // Check financial lock
@@ -320,8 +336,19 @@ export function PurchaseFormPage() {
           );
         }
 
-        if (extracted.entered_amount && extracted.entered_amount > 0) {
-          setEnteredAmount(String(extracted.entered_amount));
+        const extDiscount = Number(extracted.discount_amount || 0);
+        if (extDiscount > 0) {
+          setDiscountAmount(String(extDiscount));
+          if (extracted.discount_percent !== null && extracted.discount_percent !== undefined) {
+            setDiscountPercent(String(extracted.discount_percent));
+          } else if (extracted.subtotal_before_discount && extracted.subtotal_before_discount > 0) {
+            setDiscountPercent(((extDiscount / extracted.subtotal_before_discount) * 100).toFixed(2));
+          } else {
+            setDiscountPercent('');
+          }
+        } else {
+          setDiscountAmount('');
+          setDiscountPercent('');
         }
 
         if (extracted.line_items && extracted.line_items.length > 0) {
@@ -351,7 +378,17 @@ export function PurchaseFormPage() {
           });
           setLineItems(mappedRows);
           setUseLineItems(true);
+          if (extracted.subtotal_before_discount && extracted.subtotal_before_discount > 0) {
+            setEnteredAmount(String(extracted.subtotal_before_discount));
+          } else if (extracted.entered_amount && extracted.entered_amount > 0) {
+            setEnteredAmount(String(extracted.entered_amount));
+          }
         } else if (extracted.entered_amount && extracted.entered_amount > 0) {
+          const singleGross =
+            extDiscount > 0 && extracted.subtotal_before_discount
+              ? extracted.subtotal_before_discount
+              : extracted.entered_amount + extDiscount;
+          setEnteredAmount(String(singleGross));
           setUseLineItems(false);
         }
       }
@@ -532,35 +569,81 @@ export function PurchaseFormPage() {
     });
   };
 
+  const grossSubtotalBeforeDiscount = useMemo(() => {
+    if (useLineItems && lineItems.length > 0) {
+      return Number(
+        lineItems
+          .reduce((acc, it) => acc + (Number(it.quantity) || 0) * (Number(it.unit_price) || 0), 0)
+          .toFixed(2)
+      );
+    }
+    return Number((Number(enteredAmount) || 0).toFixed(2));
+  }, [useLineItems, lineItems, enteredAmount]);
+
+  const handleDiscountAmountChange = (rawVal: string) => {
+    setDiscountAmount(rawVal);
+    const num = Number(rawVal);
+    if (!rawVal.trim() || Number.isNaN(num) || num <= 0) {
+      setDiscountPercent('');
+      return;
+    }
+    if (grossSubtotalBeforeDiscount > 0) {
+      setDiscountPercent(((num / grossSubtotalBeforeDiscount) * 100).toFixed(2));
+    } else {
+      setDiscountPercent('');
+    }
+  };
+
+  const handleDiscountPercentChange = (rawVal: string) => {
+    setDiscountPercent(rawVal);
+    const pct = Number(rawVal);
+    if (!rawVal.trim() || Number.isNaN(pct) || pct <= 0) {
+      setDiscountAmount('');
+      return;
+    }
+    if (grossSubtotalBeforeDiscount > 0) {
+      setDiscountAmount(((grossSubtotalBeforeDiscount * pct) / 100).toFixed(2));
+    }
+  };
+
   // Live Summary Calculation
   const calculationSummary = useMemo(() => {
-    if (useLineItems && lineItems.length > 0) {
-      const totalBase = lineItems.reduce((acc, it) => acc + (it.line_subtotal || 0), 0);
-      const totalVat = lineItems.reduce((acc, it) => acc + (it.line_vat_amount || 0), 0);
-      const grandTotal = lineItems.reduce((acc, it) => acc + (it.line_total || 0), 0);
-
-      return {
-        enteredAmount: vatCalcMode === 'INCLUSIVE' ? grandTotal : totalBase,
-        baseAmount: totalBase,
-        vatAmount: totalVat,
-        totalAmount: grandTotal,
-      };
-    } else {
-      const num = Number(enteredAmount) || 0;
-      const calc = calculateVat({
-        enteredAmount: num,
+    const rawDisc = Number(discountAmount) || 0;
+    try {
+      const res = calculateDiscountedPurchase({
+        lineAmounts:
+          useLineItems && lineItems.length > 0
+            ? lineItems.map((it) => (Number(it.quantity) || 0) * (Number(it.unit_price) || 0))
+            : undefined,
+        enteredAmount: useLineItems && lineItems.length > 0 ? undefined : enteredAmount || 0,
+        discountAmount: discountAmount || 0,
         taxType,
         mode: vatCalcMode,
       });
 
       return {
-        enteredAmount: num,
-        baseAmount: Number(calc.baseAmount),
-        vatAmount: Number(calc.vatAmount),
-        totalAmount: Number(calc.totalAmount),
+        grossBeforeDiscount: Number((res.grossEnteredPaisa / 100).toFixed(2)),
+        discountAmount: Number(res.discountAmount),
+        enteredAmount: Number(res.enteredAmount),
+        baseAmount: Number(res.purchaseAmount),
+        vatAmount: Number(res.vatAmount),
+        totalAmount: Number(res.totalAmount),
+        itemBreakdown: res.items,
+        discountError: null as string | null,
+      };
+    } catch (err: any) {
+      return {
+        grossBeforeDiscount: grossSubtotalBeforeDiscount,
+        discountAmount: rawDisc,
+        enteredAmount: 0,
+        baseAmount: 0,
+        vatAmount: 0,
+        totalAmount: 0,
+        itemBreakdown: [],
+        discountError: err?.message || 'Invalid discount amount.',
       };
     }
-  }, [useLineItems, lineItems, enteredAmount, taxType, vatCalcMode]);
+  }, [grossSubtotalBeforeDiscount, useLineItems, lineItems, enteredAmount, discountAmount, taxType, vatCalcMode]);
 
   // Selected Vendor object
   const currentVendor = useMemo(() => {
@@ -632,6 +715,11 @@ export function PurchaseFormPage() {
       return;
     }
 
+    if (calculationSummary.discountError) {
+      toastInfo(calculationSummary.discountError, 'Invalid Discount');
+      return;
+    }
+
     setSaving(true);
     try {
       if (isEdit && purchaseId) {
@@ -652,6 +740,7 @@ export function PurchaseFormPage() {
           patchData.vendor_id = selectedVendorId;
           patchData.tax_type = taxType;
           patchData.vat_calc_mode = vatCalcMode;
+          patchData.discount_amount = Number(discountAmount) || 0;
 
           if (useLineItems) {
             patchData.items = lineItems.map((it) => ({
@@ -704,6 +793,7 @@ export function PurchaseFormPage() {
         formData.append('fiscal_year', fiscalYear);
         formData.append('tax_type', taxType);
         formData.append('vat_calc_mode', vatCalcMode);
+        formData.append('discount_amount', String(Number(discountAmount) || 0));
         formData.append('idempotency_key', idempotencyKey);
 
         if (useLineItems) {
@@ -805,6 +895,8 @@ export function PurchaseFormPage() {
               ? () => {
                   setUseLineItems(false);
                   setEnteredAmount(String(scanResult.extracted.entered_amount));
+                  setDiscountAmount('');
+                  setDiscountPercent('');
                 }
               : undefined
           }
@@ -1298,17 +1390,31 @@ export function PurchaseFormPage() {
 
                         {/* Computed Line Subtotal */}
                         <td className="p-2 text-right font-mono tabular-nums text-slate-700">
-                          {formatNpr(item.line_subtotal)}
+                          {formatNpr(
+                            calculationSummary.itemBreakdown[idx]
+                              ? Number(calculationSummary.itemBreakdown[idx].baseAmount)
+                              : item.line_subtotal
+                          )}
                         </td>
 
                         {/* Computed Line VAT */}
                         <td className="p-2 text-right font-mono tabular-nums text-teal-700 font-semibold">
-                          {taxType === 'NON_VAT' ? 'Rs. 0.00' : formatNpr(item.line_vat_amount)}
+                          {taxType === 'NON_VAT'
+                            ? 'Rs. 0.00'
+                            : formatNpr(
+                                calculationSummary.itemBreakdown[idx]
+                                  ? Number(calculationSummary.itemBreakdown[idx].vatAmount)
+                                  : item.line_vat_amount
+                              )}
                         </td>
 
                         {/* Computed Line Total */}
                         <td className="p-2 text-right font-mono tabular-nums font-bold text-slate-900">
-                          {formatNpr(item.line_total)}
+                          {formatNpr(
+                            calculationSummary.itemBreakdown[idx]
+                              ? Number(calculationSummary.itemBreakdown[idx].totalAmount)
+                              : item.line_total
+                          )}
                         </td>
 
                         {/* Remove Row */}
@@ -1343,6 +1449,59 @@ export function PurchaseFormPage() {
             </div>
           )}
 
+          {/* Bill Discount Input (Applies Before VAT) */}
+          <div className="pt-2 border-t border-slate-100">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Bill Discount Amount (Rs.)
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-500">
+                    Rs.
+                  </span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="0.00"
+                    disabled={isFinanciallyLocked}
+                    value={discountAmount}
+                    onChange={(e) => handleDiscountAmountChange(e.target.value)}
+                    className="w-full pl-10 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm font-semibold font-mono text-slate-900 focus:bg-white focus:outline-emerald-600 tabular-nums"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Discount % (Optional)
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max="100"
+                    placeholder="0.00"
+                    disabled={isFinanciallyLocked}
+                    value={discountPercent}
+                    onChange={(e) => handleDiscountPercentChange(e.target.value)}
+                    className="w-full pl-3 pr-8 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm font-semibold font-mono text-slate-900 focus:bg-white focus:outline-emerald-600 tabular-nums"
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-500">
+                    %
+                  </span>
+                </div>
+              </div>
+            </div>
+            {calculationSummary.discountError && (
+              <p className="mt-1.5 text-xs font-medium text-rose-600">
+                {calculationSummary.discountError}
+              </p>
+            )}
+          </div>
+
           {/* Live VAT Calculation Breakdown Card */}
           <div className="bg-slate-900 text-white p-4 rounded-xl shadow-md space-y-3 font-mono">
             <div className="flex items-center justify-between text-xs text-slate-400 border-b border-slate-800 pb-2">
@@ -1357,6 +1516,23 @@ export function PurchaseFormPage() {
                   : 'Total × 13 / 113'}
               </span>
             </div>
+
+            {calculationSummary.discountAmount > 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-3 text-xs border-b border-slate-800 pb-2.5 text-slate-300">
+                <span>
+                  Subtotal Before Discount:{' '}
+                  <strong className="text-slate-100 tabular-nums">
+                    {formatNpr(calculationSummary.grossBeforeDiscount)}
+                  </strong>
+                </span>
+                <span className="text-amber-300">
+                  Less Discount:{' '}
+                  <strong className="tabular-nums">
+                    - {formatNpr(calculationSummary.discountAmount)}
+                  </strong>
+                </span>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
               <div>

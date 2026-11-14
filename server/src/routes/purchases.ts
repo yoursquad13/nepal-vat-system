@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { pool, withTransaction } from '../config/db.js';
 import { ApiError } from '../utils/errors.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
-import { calculateVat, toPaisa, fromPaisa } from '../utils/money.js';
+import { calculateVat, calculateDiscountedPurchase, toPaisa, fromPaisa } from '../utils/money.js';
 import {
   adToBs,
   bsToAd,
@@ -85,6 +85,7 @@ function formatPurchase(row: any) {
     entry_date_ad: formatDateString(row.entry_date_ad),
     vat_bill_date_ad: formatDateString(row.vat_bill_date_ad),
     entered_amount: Number(row.entered_amount),
+    discount_amount: Number(row.discount_amount || 0),
     purchase_amount: Number(row.purchase_amount),
     vat_amount: Number(row.vat_amount),
     total_amount: Number(row.total_amount),
@@ -649,22 +650,14 @@ purchasesRouter.post(
       }
       const vendor = vendorCheck.rows[0];
 
-      // Calculate Line Items
-      const computedItems = rawItems.map((item: any) => {
+      // Validate and compute line items + bill-level discount + header totals
+      const normalizedRawItems = rawItems.map((item: any) => {
         const productName = String(item.product_name ?? item.productName ?? '').trim();
         if (!productName) {
           throw ApiError.badRequest('product_name is required for each line item');
         }
         const quantity = Number(item.quantity) || 1;
         const unitPrice = Number(item.unit_price ?? item.unitPrice) || 0;
-        const enteredLineAmount = quantity * unitPrice;
-
-        const lineCalc = calculateVat({
-          enteredAmount: enteredLineAmount,
-          taxType,
-          mode: vatCalcMode,
-        });
-
         return {
           product_id: item.product_id ? Number(item.product_id) : null,
           product_name: productName,
@@ -674,44 +667,45 @@ purchasesRouter.post(
           quantity,
           unit_of_measurement: (item.unit_of_measurement ?? item.unitOfMeasurement)?.trim() || 'pcs',
           unit_price: unitPrice,
-          line_subtotal: Number(lineCalc.baseAmount),
-          line_vat_amount: Number(lineCalc.vatAmount),
-          line_total: Number(lineCalc.totalAmount),
+          grossLineAmount: quantity * unitPrice,
         };
       });
 
-      // Calculate Header Amounts
       const enteredAmountRaw = body.entered_amount ?? body.enteredAmount;
-      let enteredAmount: number;
-      let purchaseAmount: number;
-      let vatAmount: number;
-      let totalAmount: number;
+      const discountAmountRaw = body.discount_amount ?? body.discountAmount ?? 0;
 
-      if (enteredAmountRaw !== undefined && enteredAmountRaw !== null && enteredAmountRaw !== '') {
-        const headerCalc = calculateVat({
+      let financialCalc;
+      try {
+        financialCalc = calculateDiscountedPurchase({
+          lineAmounts: normalizedRawItems.map((it) => it.grossLineAmount),
           enteredAmount: enteredAmountRaw,
+          discountAmount: discountAmountRaw,
           taxType,
           mode: vatCalcMode,
         });
-        enteredAmount = Number(fromPaisa(headerCalc.enteredPaisa));
-        purchaseAmount = Number(headerCalc.baseAmount);
-        vatAmount = Number(headerCalc.vatAmount);
-        totalAmount = Number(headerCalc.totalAmount);
-      } else if (computedItems.length > 0) {
-        const totalSubtotalPaisa = computedItems.reduce((acc, it) => acc + toPaisa(it.line_subtotal), 0);
-        const totalVatPaisa = computedItems.reduce((acc, it) => acc + toPaisa(it.line_vat_amount), 0);
-        const totalTotalPaisa = computedItems.reduce((acc, it) => acc + toPaisa(it.line_total), 0);
-
-        purchaseAmount = Number(fromPaisa(totalSubtotalPaisa));
-        vatAmount = Number(fromPaisa(totalVatPaisa));
-        totalAmount = Number(fromPaisa(totalTotalPaisa));
-        enteredAmount = vatCalcMode === 'INCLUSIVE' ? totalAmount : purchaseAmount;
-      } else {
-        enteredAmount = 0;
-        purchaseAmount = 0;
-        vatAmount = 0;
-        totalAmount = 0;
+      } catch (err: any) {
+        throw ApiError.badRequest(err?.message || 'Invalid purchase amount or discount.');
       }
+
+      const computedItems = normalizedRawItems.map((it, idx) => ({
+        product_id: it.product_id,
+        product_name: it.product_name,
+        category: it.category,
+        sku: it.sku,
+        description: it.description,
+        quantity: it.quantity,
+        unit_of_measurement: it.unit_of_measurement,
+        unit_price: it.unit_price,
+        line_subtotal: Number(financialCalc.items[idx].baseAmount),
+        line_vat_amount: Number(financialCalc.items[idx].vatAmount),
+        line_total: Number(financialCalc.items[idx].totalAmount),
+      }));
+
+      const discountAmount = Number(financialCalc.discountAmount);
+      const enteredAmount = Number(financialCalc.enteredAmount);
+      const purchaseAmount = Number(financialCalc.purchaseAmount);
+      const vatAmount = Number(financialCalc.vatAmount);
+      const totalAmount = Number(financialCalc.totalAmount);
 
       // Initial Statuses
       const reviewStatus = 'PENDING_REVIEW';
@@ -771,7 +765,7 @@ purchasesRouter.post(
             entry_at, entry_date_ad, entry_time_npt, entry_date_bs,
             purchase_date_ad, purchase_date_bs, fiscal_year,
             vat_bill_date_ad, vat_bill_date_bs,
-            tax_type, vat_calc_mode, entered_amount, purchase_amount, vat_amount, total_amount, paid_amount,
+            tax_type, vat_calc_mode, entered_amount, discount_amount, purchase_amount, vat_amount, total_amount, paid_amount,
             review_status, vat_bill_status, payment_status,
             submitted_by, vat_bill_uploaded_at, remarks, idempotency_key
           ) VALUES (
@@ -779,9 +773,9 @@ purchasesRouter.post(
             $6, $7, $8, $9,
             $10, $11, $12,
             $13, $14,
-            $15, $16, $17, $18, $19, $20, 0,
-            $21, $22, $23,
-            $24, $25, $26, $27
+            $15, $16, $17, $18, $19, $20, $21, 0,
+            $22, $23, $24,
+            $25, $26, $27, $28
           ) RETURNING *`,
           [
             purchaseCode,
@@ -801,6 +795,7 @@ purchasesRouter.post(
             taxType,
             vatCalcMode,
             enteredAmount,
+            discountAmount,
             purchaseAmount,
             vatAmount,
             totalAmount,
@@ -965,6 +960,8 @@ purchasesRouter.patch(
           'vatCalcMode',
           'entered_amount',
           'enteredAmount',
+          'discount_amount',
+          'discountAmount',
           'purchase_amount',
           'purchaseAmount',
           'vat_amount',
@@ -981,6 +978,8 @@ purchasesRouter.patch(
                   ? Number(current.vendor_id)
                   : f === 'entered_amount' || f === 'enteredAmount'
                   ? Number(current.entered_amount)
+                  : f === 'discount_amount' || f === 'discountAmount'
+                  ? Number(current.discount_amount || 0)
                   : f === 'purchase_amount' || f === 'purchaseAmount'
                   ? Number(current.purchase_amount)
                   : f === 'vat_amount' || f === 'vatAmount'
@@ -1073,12 +1072,21 @@ purchasesRouter.patch(
         }
 
         // Financial recalculations (only if NOT locked)
+        let discountAmount = Number(current.discount_amount || 0);
         let enteredAmount = Number(current.entered_amount);
         let purchaseAmount = Number(current.purchase_amount);
         let vatAmount = Number(current.vat_amount);
         let totalAmount = Number(current.total_amount);
         let taxType = current.tax_type;
         let vatCalcMode = current.vat_calc_mode;
+
+        const discountRaw = body.discount_amount ?? body.discountAmount;
+        const enteredRaw = body.entered_amount ?? body.enteredAmount;
+        const hasTaxOrModeChange =
+          body.tax_type !== undefined ||
+          body.taxType !== undefined ||
+          body.vat_calc_mode !== undefined ||
+          body.vatCalcMode !== undefined;
 
         if (!isFinanciallyLocked) {
           if (body.tax_type ?? body.taxType) {
@@ -1087,17 +1095,11 @@ purchasesRouter.patch(
           if (body.vat_calc_mode ?? body.vatCalcMode) {
             vatCalcMode = (body.vat_calc_mode ?? body.vatCalcMode) === 'INCLUSIVE' ? 'INCLUSIVE' : 'EXCLUSIVE';
           }
-          const enteredRaw = body.entered_amount ?? body.enteredAmount;
-          if (enteredRaw !== undefined) {
-            const calc = calculateVat({
-              enteredAmount: enteredRaw,
-              taxType,
-              mode: vatCalcMode,
-            });
-            enteredAmount = Number(fromPaisa(calc.enteredPaisa));
-            purchaseAmount = Number(calc.baseAmount);
-            vatAmount = Number(calc.vatAmount);
-            totalAmount = Number(calc.totalAmount);
+          if (discountRaw !== undefined) {
+            discountAmount = Number(discountRaw) || 0;
+            if (discountAmount < 0) {
+              throw ApiError.badRequest('Discount amount cannot be negative.');
+            }
           }
         }
 
@@ -1111,32 +1113,50 @@ purchasesRouter.patch(
 
           // Delete only unstocked items
           await client.query(
-            'SELECT id FROM purchase_items WHERE purchase_id = $1 AND stock_received = FALSE',
-            [id]
-          );
-          await client.query(
             'DELETE FROM purchase_items WHERE purchase_id = $1 AND stock_received = FALSE',
             [id]
           );
 
-          // Re-insert unstocked items
-          for (const item of body.items) {
-            // If item matches an already stocked item id, skip re-insertion
-            if (item.id && existingStocked.rows.some((s) => Number(s.id) === Number(item.id))) {
-              continue;
+          const itemsToInsert: Array<{ item: any; productName: string }> = body.items
+            .map((item: any) => ({
+              item,
+              productName: String(item.product_name ?? item.productName ?? '').trim(),
+            }))
+            .filter(
+              ({ item, productName }: { item: any; productName: string }) =>
+                Boolean(productName) &&
+                !(item.id && existingStocked.rows.some((s) => Number(s.id) === Number(item.id)))
+            );
+
+          let itemsDiscCalc;
+          if (!isFinanciallyLocked && itemsToInsert.length > 0 && existingStocked.rows.length === 0) {
+            try {
+              const lineAmounts = itemsToInsert.map(
+                ({ item }) => (Number(item.quantity) || 1) * (Number(item.unit_price ?? item.unitPrice) || 0)
+              );
+              itemsDiscCalc = calculateDiscountedPurchase({
+                lineAmounts,
+                discountAmount,
+                taxType,
+                mode: vatCalcMode,
+              });
+            } catch (err: any) {
+              throw ApiError.badRequest(err?.message || 'Invalid discount for purchase items.');
             }
+          }
 
-            const productName = String(item.product_name ?? item.productName ?? '').trim();
-            if (!productName) continue;
-
+          for (let idx = 0; idx < itemsToInsert.length; idx++) {
+            const { item, productName } = itemsToInsert[idx];
             const qty = Number(item.quantity) || 1;
             const price = Number(item.unit_price ?? item.unitPrice) || 0;
-            const lineAmt = qty * price;
-            const lineCalc = calculateVat({
-              enteredAmount: lineAmt,
-              taxType,
-              mode: vatCalcMode,
-            });
+            const allocated = itemsDiscCalc?.items[idx];
+            const lineCalc =
+              allocated ||
+              calculateVat({
+                enteredAmount: qty * price,
+                taxType,
+                mode: vatCalcMode,
+              });
 
             await client.query(
               `INSERT INTO purchase_items (
@@ -1160,33 +1180,87 @@ purchasesRouter.patch(
             );
           }
 
-          // Recalculate header totals when items are patched without explicit entered_amount
-          if (
-            !isFinanciallyLocked &&
-            body.entered_amount === undefined &&
-            body.enteredAmount === undefined &&
-            body.items.length > 0
-          ) {
-            const allItemsRes = await client.query(
-              'SELECT line_subtotal, line_vat_amount, line_total FROM purchase_items WHERE purchase_id = $1',
-              [id]
-            );
-            const totalSubtotalPaisa = allItemsRes.rows.reduce(
-              (acc, it) => acc + toPaisa(it.line_subtotal),
-              0
-            );
-            const totalVatPaisa = allItemsRes.rows.reduce(
-              (acc, it) => acc + toPaisa(it.line_vat_amount),
-              0
-            );
-            const totalTotalPaisa = allItemsRes.rows.reduce(
-              (acc, it) => acc + toPaisa(it.line_total),
-              0
-            );
-            purchaseAmount = Number(fromPaisa(totalSubtotalPaisa));
-            vatAmount = Number(fromPaisa(totalVatPaisa));
-            totalAmount = Number(fromPaisa(totalTotalPaisa));
-            enteredAmount = vatCalcMode === 'INCLUSIVE' ? totalAmount : purchaseAmount;
+          if (!isFinanciallyLocked && itemsDiscCalc && enteredRaw === undefined) {
+            discountAmount = Number(itemsDiscCalc.discountAmount);
+            enteredAmount = Number(itemsDiscCalc.enteredAmount);
+            purchaseAmount = Number(itemsDiscCalc.purchaseAmount);
+            vatAmount = Number(itemsDiscCalc.vatAmount);
+            totalAmount = Number(itemsDiscCalc.totalAmount);
+          } else if (!isFinanciallyLocked && enteredRaw !== undefined) {
+            try {
+              const discCalc = calculateDiscountedPurchase({
+                enteredAmount: enteredRaw,
+                discountAmount,
+                taxType,
+                mode: vatCalcMode,
+              });
+              discountAmount = Number(discCalc.discountAmount);
+              enteredAmount = Number(discCalc.enteredAmount);
+              purchaseAmount = Number(discCalc.purchaseAmount);
+              vatAmount = Number(discCalc.vatAmount);
+              totalAmount = Number(discCalc.totalAmount);
+            } catch (err: any) {
+              throw ApiError.badRequest(err?.message || 'Invalid discount amount.');
+            }
+          }
+        } else if (
+          !isFinanciallyLocked &&
+          (enteredRaw !== undefined || discountRaw !== undefined || hasTaxOrModeChange)
+        ) {
+          const existingItemsRes = await client.query(
+            'SELECT id, quantity, unit_price FROM purchase_items WHERE purchase_id = $1 ORDER BY id ASC',
+            [id]
+          );
+
+          try {
+            if (existingItemsRes.rows.length > 0 && enteredRaw === undefined) {
+              const lineAmounts = existingItemsRes.rows.map(
+                (r) => (Number(r.quantity) || 1) * (Number(r.unit_price) || 0)
+              );
+              const discCalc = calculateDiscountedPurchase({
+                lineAmounts,
+                discountAmount,
+                taxType,
+                mode: vatCalcMode,
+              });
+              for (let idx = 0; idx < existingItemsRes.rows.length; idx++) {
+                const lineCalc = discCalc.items[idx];
+                await client.query(
+                  `UPDATE purchase_items
+                   SET line_subtotal = $1, line_vat_amount = $2, line_total = $3
+                   WHERE id = $4`,
+                  [
+                    Number(lineCalc.baseAmount),
+                    Number(lineCalc.vatAmount),
+                    Number(lineCalc.totalAmount),
+                    existingItemsRes.rows[idx].id,
+                  ]
+                );
+              }
+              discountAmount = Number(discCalc.discountAmount);
+              enteredAmount = Number(discCalc.enteredAmount);
+              purchaseAmount = Number(discCalc.purchaseAmount);
+              vatAmount = Number(discCalc.vatAmount);
+              totalAmount = Number(discCalc.totalAmount);
+            } else {
+              const grossEntered =
+                enteredRaw !== undefined
+                  ? enteredRaw
+                  : Number(current.entered_amount) + Number(current.discount_amount || 0);
+              const discCalc = calculateDiscountedPurchase({
+                enteredAmount: grossEntered,
+                discountAmount,
+                taxType,
+                mode: vatCalcMode,
+              });
+              discountAmount = Number(discCalc.discountAmount);
+              enteredAmount = Number(discCalc.enteredAmount);
+              purchaseAmount = Number(discCalc.purchaseAmount);
+              vatAmount = Number(discCalc.vatAmount);
+              totalAmount = Number(discCalc.totalAmount);
+            }
+          } catch (err: any) {
+            throw ApiError.badRequest(err?.message || 'Invalid discount amount.');
           }
         }
 
@@ -1223,14 +1297,15 @@ purchasesRouter.patch(
                tax_type = $11,
                vat_calc_mode = $12,
                entered_amount = $13,
-               purchase_amount = $14,
-               vat_amount = $15,
-               total_amount = $16,
-               review_status = $17,
-               payment_status = $18,
-               rejection_reason = $19,
+               discount_amount = $14,
+               purchase_amount = $15,
+               vat_amount = $16,
+               total_amount = $17,
+               review_status = $18,
+               payment_status = $19,
+               rejection_reason = $20,
                updated_at = NOW()
-           WHERE id = $20
+           WHERE id = $21
            RETURNING *`,
           [
             vendorId,
@@ -1246,6 +1321,7 @@ purchasesRouter.patch(
             taxType,
             vatCalcMode,
             enteredAmount,
+            discountAmount,
             purchaseAmount,
             vatAmount,
             totalAmount,

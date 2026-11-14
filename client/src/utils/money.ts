@@ -131,4 +131,186 @@ export function formatNpr(amount: number | string): string {
   return `${isNegative ? '-' : ''}Rs. ${absFormatted}`;
 }
 
+export interface DiscountedLineCalc {
+  grossPaisa: number;
+  discountPaisa: number;
+  baseAmount: string;
+  vatAmount: string;
+  totalAmount: string;
+}
+
+export interface DiscountedPurchaseCalcResult {
+  grossEnteredPaisa: number;
+  discountPaisa: number;
+  netEnteredPaisa: number;
+  discountAmount: string;
+  enteredAmount: string;
+  purchaseAmount: string;
+  vatAmount: string;
+  totalAmount: string;
+  items: DiscountedLineCalc[];
+}
+
+/**
+ * Proportionally allocates a bill-level discount across line items (with remainder on the last positive line)
+ * and computes 13% VAT / NON_VAT totals using exact integer paisa arithmetic.
+ */
+export function calculateDiscountedPurchase(params: {
+  lineAmounts?: Array<number | string>;
+  enteredAmount?: number | string | null;
+  discountAmount?: number | string | null;
+  taxType: 'VAT_13' | 'NON_VAT';
+  mode: 'EXCLUSIVE' | 'INCLUSIVE';
+}): DiscountedPurchaseCalcResult {
+  const discountPaisa =
+    params.discountAmount !== undefined &&
+    params.discountAmount !== null &&
+    String(params.discountAmount).trim() !== ''
+      ? toPaisa(params.discountAmount)
+      : 0;
+
+  if (discountPaisa < 0) {
+    throw new Error('Discount amount cannot be negative.');
+  }
+
+  const lineInputs = params.lineAmounts || [];
+  if (lineInputs.length > 0) {
+    const grossLinePaisas = lineInputs.map((amt) => Math.max(0, toPaisa(amt)));
+    const grossTotalPaisa = grossLinePaisas.reduce((acc, p) => acc + p, 0);
+
+    if (discountPaisa > grossTotalPaisa) {
+      throw new Error('Discount amount cannot exceed subtotal before discount.');
+    }
+
+    let remainingDiscount = discountPaisa;
+    let remainingGross = grossTotalPaisa;
+    const itemResults: DiscountedLineCalc[] = grossLinePaisas.map((grossPaisa) => {
+      let lineDiscount = 0;
+      if (remainingDiscount > 0 && grossPaisa > 0 && remainingGross > 0) {
+        if (grossPaisa >= remainingGross) {
+          lineDiscount = remainingDiscount;
+        } else {
+          lineDiscount = Math.min(
+            grossPaisa,
+            Math.round((remainingDiscount * grossPaisa) / remainingGross)
+          );
+        }
+        remainingDiscount -= lineDiscount;
+        remainingGross -= grossPaisa;
+      }
+
+      const netLinePaisa = Math.max(0, grossPaisa - lineDiscount);
+      const calc = calculateVat({
+        enteredAmount: fromPaisa(netLinePaisa),
+        taxType: params.taxType,
+        mode: params.mode,
+      });
+
+      return {
+        grossPaisa,
+        discountPaisa: lineDiscount,
+        baseAmount: calc.baseAmount,
+        vatAmount: calc.vatAmount,
+        totalAmount: calc.totalAmount,
+      };
+    });
+
+    const hasExplicitEntered =
+      params.enteredAmount !== undefined &&
+      params.enteredAmount !== null &&
+      String(params.enteredAmount).trim() !== '';
+
+    if (hasExplicitEntered) {
+      const explicitGross = toPaisa(params.enteredAmount as number | string);
+      if (discountPaisa > explicitGross) {
+        throw new Error('Discount amount cannot exceed entered amount.');
+      }
+      const netPaisa = explicitGross - discountPaisa;
+      const headerCalc = calculateVat({
+        enteredAmount: fromPaisa(netPaisa),
+        taxType: params.taxType,
+        mode: params.mode,
+      });
+      return {
+        grossEnteredPaisa: explicitGross,
+        discountPaisa,
+        netEnteredPaisa: headerCalc.enteredPaisa,
+        discountAmount: fromPaisa(discountPaisa),
+        enteredAmount: fromPaisa(headerCalc.enteredPaisa),
+        purchaseAmount: headerCalc.baseAmount,
+        vatAmount: headerCalc.vatAmount,
+        totalAmount: headerCalc.totalAmount,
+        items: itemResults,
+      };
+    }
+
+    if (discountPaisa > 0) {
+      const netHeaderPaisa = grossTotalPaisa - discountPaisa;
+      const headerCalc = calculateVat({
+        enteredAmount: fromPaisa(netHeaderPaisa),
+        taxType: params.taxType,
+        mode: params.mode,
+      });
+      return {
+        grossEnteredPaisa: grossTotalPaisa,
+        discountPaisa,
+        netEnteredPaisa: headerCalc.enteredPaisa,
+        discountAmount: fromPaisa(discountPaisa),
+        enteredAmount: fromPaisa(headerCalc.enteredPaisa),
+        purchaseAmount: headerCalc.baseAmount,
+        vatAmount: headerCalc.vatAmount,
+        totalAmount: headerCalc.totalAmount,
+        items: itemResults,
+      };
+    }
+
+    const totalBasePaisa = itemResults.reduce((acc, it) => acc + toPaisa(it.baseAmount), 0);
+    const totalVatPaisa = itemResults.reduce((acc, it) => acc + toPaisa(it.vatAmount), 0);
+    const totalTotalPaisa = itemResults.reduce((acc, it) => acc + toPaisa(it.totalAmount), 0);
+    const enteredPaisa = params.mode === 'INCLUSIVE' ? totalTotalPaisa : totalBasePaisa;
+
+    return {
+      grossEnteredPaisa: grossTotalPaisa,
+      discountPaisa: 0,
+      netEnteredPaisa: enteredPaisa,
+      discountAmount: '0.00',
+      enteredAmount: fromPaisa(enteredPaisa),
+      purchaseAmount: fromPaisa(totalBasePaisa),
+      vatAmount: fromPaisa(totalVatPaisa),
+      totalAmount: fromPaisa(totalTotalPaisa),
+      items: itemResults,
+    };
+  }
+
+  const grossEnteredPaisa =
+    params.enteredAmount !== undefined &&
+    params.enteredAmount !== null &&
+    String(params.enteredAmount).trim() !== ''
+      ? toPaisa(params.enteredAmount)
+      : 0;
+
+  if (discountPaisa > grossEnteredPaisa) {
+    throw new Error('Discount amount cannot exceed entered purchase amount.');
+  }
+
+  const netEnteredPaisa = grossEnteredPaisa - discountPaisa;
+  const headerCalc = calculateVat({
+    enteredAmount: fromPaisa(netEnteredPaisa),
+    taxType: params.taxType,
+    mode: params.mode,
+  });
+
+  return {
+    grossEnteredPaisa,
+    discountPaisa,
+    netEnteredPaisa: headerCalc.enteredPaisa,
+    discountAmount: fromPaisa(discountPaisa),
+    enteredAmount: fromPaisa(headerCalc.enteredPaisa),
+    purchaseAmount: headerCalc.baseAmount,
+    vatAmount: headerCalc.vatAmount,
+    totalAmount: headerCalc.totalAmount,
+    items: [],
+  };
+}
+
 export const formatNPR = formatNpr;

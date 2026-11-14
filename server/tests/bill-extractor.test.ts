@@ -18,6 +18,7 @@ process.env.DATABASE_URL = testDbUrl;
 import { runMigrations } from '../src/db/migrate.js';
 import { seedDatabase } from '../src/db/seed.js';
 import { createApp } from '../src/app.js';
+import { calculateDiscountedPurchase } from '../src/utils/money.js';
 import {
   normalizeNepaliDigits,
   normalizeDateToken,
@@ -230,4 +231,214 @@ test('POST /api/purchases/extract-bill enforces auth, file validation, and retur
   assert.equal(okRes.status, 200);
   assert.equal(okRes.body.extracted.bill_number, '459');
   assert.equal(okRes.body.matched_vendor.id, vendorId);
+});
+
+test('calculateDiscountedPurchase matches Dreamy Boutique Hotel #268 bill math, INCLUSIVE mode, and validation', () => {
+  const exactLineAmounts = [3451.32, 2831.85, 5575.22, 2212.38, 2123.89, 3451.32, 2831.85, 2654.86, 1858.4];
+  assert.equal(Number(exactLineAmounts.reduce((a, b) => a + b, 0).toFixed(2)), 26991.09);
+
+  const calc = calculateDiscountedPurchase({
+    lineAmounts: exactLineAmounts,
+    discountAmount: 3778.71,
+    taxType: 'VAT_13',
+    mode: 'EXCLUSIVE',
+  });
+
+  assert.equal(calc.discountAmount, '3778.71');
+  assert.equal(calc.enteredAmount, '23212.38');
+  assert.equal(calc.purchaseAmount, '23212.38');
+  assert.equal(calc.vatAmount, '3017.61');
+  assert.equal(calc.totalAmount, '26229.99');
+  assert.equal(calc.items.length, 9);
+
+  const sumItemBases = calc.items.reduce((acc, it) => acc + Number(it.baseAmount), 0);
+  const sumItemDiscounts = calc.items.reduce((acc, it) => acc + it.discountPaisa, 0);
+  assert.equal(sumItemDiscounts, 377871);
+  assert.equal(sumItemBases.toFixed(2), '23212.38');
+
+  // INCLUSIVE mode with single amount
+  const incl = calculateDiscountedPurchase({
+    enteredAmount: 1230,
+    discountAmount: 100,
+    taxType: 'VAT_13',
+    mode: 'INCLUSIVE',
+  });
+  assert.equal(incl.discountAmount, '100.00');
+  assert.equal(incl.enteredAmount, '1130.00');
+  assert.equal(incl.purchaseAmount, '1000.00');
+  assert.equal(incl.vatAmount, '130.00');
+  assert.equal(incl.totalAmount, '1130.00');
+
+  // Validation errors
+  assert.throws(
+    () =>
+      calculateDiscountedPurchase({
+        enteredAmount: 500,
+        discountAmount: -1,
+        taxType: 'VAT_13',
+        mode: 'EXCLUSIVE',
+      }),
+    /cannot be negative/i
+  );
+  assert.throws(
+    () =>
+      calculateDiscountedPurchase({
+        lineAmounts: [100, 200],
+        discountAmount: 300.01,
+        taxType: 'VAT_13',
+        mode: 'EXCLUSIVE',
+      }),
+    /cannot exceed subtotal before discount/i
+  );
+});
+
+test('normalizeExtractedBill derives discount_percent and handles discounted bills cleanly', () => {
+  const { extracted, warnings } = normalizeExtractedBill({
+    document_type: 'TAX_INVOICE',
+    language: 'EN',
+    vendor: {
+      name: 'Dreamy Boutique Hotel',
+      pan_number: '623530470',
+    },
+    bill_number: '268',
+    purchase_date_bs: '2083-06-22',
+    tax_type: 'VAT_13',
+    vat_calc_mode: 'EXCLUSIVE',
+    product_summary: 'Food & Restaurant Order',
+    subtotal_before_discount: 26991.09,
+    discount_amount: 3778.71,
+    taxable_amount: 23212.38,
+    vat_amount: 3017.62,
+    total_amount: 26230,
+    line_items: [
+      { name: 'Veg cheeze pizza', unit: 'pcs', quantity: 6, unit_price: 575.22, line_total: 3451.32 },
+    ],
+  });
+
+  assert.equal(extracted.subtotal_before_discount, 26991.09);
+  assert.equal(extracted.discount_amount, 3778.71);
+  assert.equal(extracted.discount_percent, 14);
+  assert.equal(extracted.taxable_amount, 23212.38);
+  assert.equal(extracted.entered_amount, 23212.38);
+  assert.equal(extracted.vat_amount, 3017.62);
+  assert.equal(extracted.total_amount, 26230);
+  assert.equal(warnings.length, 0);
+});
+
+test('POST /api/purchases, PATCH /api/purchases/:id, and receive-stock handle discounts accurately', async () => {
+  const adminLogin = await request(app)
+    .post('/api/auth/login')
+    .send({ username: 'admin', password: 'Admin@123' });
+  assert.equal(adminLogin.status, 200);
+  const adminCookie = (adminLogin.headers['set-cookie'] || []).find((c: string) =>
+    c.startsWith('token=')
+  )!;
+
+  const prodRes = await testPool.query(
+    `INSERT INTO products (name, sku, unit_of_measurement, current_stock, avg_purchase_price, latest_purchase_price, is_active)
+     VALUES ('Pizza Test Item', 'PIZ-DISC-01', 'pcs', 0, 0, 0, TRUE)
+     RETURNING id`
+  );
+  const productId = Number(prodRes.rows[0].id);
+
+  // 1. POST with items + discount_amount
+  const itemsPayload = [
+    { product_id: productId, product_name: 'Pizza Test Item', quantity: 10, unit_of_measurement: 'pcs', unit_price: 200 },
+    { product_name: 'Side Salad', quantity: 5, unit_of_measurement: 'pcs', unit_price: 100 },
+  ];
+  const createItemsRes = await request(app)
+    .post('/api/purchases')
+    .set('Cookie', staffCookie)
+    .send({
+      vendor_id: vendorId,
+      product_summary: 'Discounted Food Supplies',
+      purchase_date_ad: '2026-11-14',
+      purchase_date_bs: '2083-07-28',
+      fiscal_year: '2083/84',
+      tax_type: 'VAT_13',
+      vat_calc_mode: 'EXCLUSIVE',
+      discount_amount: 500,
+      items: JSON.stringify(itemsPayload),
+    });
+
+  assert.equal(createItemsRes.status, 201);
+  const createdId = Number(createItemsRes.body.purchase.id);
+  // Gross = 2000 + 500 = 2500, Discount = 500 -> Net = 2000, VAT = 260, Total = 2260
+  assert.equal(createItemsRes.body.purchase.discount_amount, 500);
+  assert.equal(createItemsRes.body.purchase.entered_amount, 2000);
+  assert.equal(createItemsRes.body.purchase.purchase_amount, 2000);
+  assert.equal(createItemsRes.body.purchase.vat_amount, 260);
+  assert.equal(createItemsRes.body.purchase.total_amount, 2260);
+  // Proportionally allocated: item 1 gets 400 discount -> net 1600 -> avg cost 160/pc
+  assert.equal(Number(createItemsRes.body.items[0].line_subtotal), 1600);
+  assert.equal(Number(createItemsRes.body.items[1].line_subtotal), 400);
+
+  // 2. PATCH updating discount_amount (without re-sending items)
+  const patchDiscRes = await request(app)
+    .patch(`/api/purchases/${createdId}`)
+    .set('Cookie', staffCookie)
+    .send({ discount_amount: 250 });
+
+  assert.equal(patchDiscRes.status, 200);
+  assert.equal(patchDiscRes.body.purchase.discount_amount, 250);
+  assert.equal(patchDiscRes.body.purchase.purchase_amount, 2250);
+  assert.equal(patchDiscRes.body.purchase.vat_amount, 292.5);
+  assert.equal(patchDiscRes.body.purchase.total_amount, 2542.5);
+  // Proportionally allocated: item 1 gets 200 discount -> net 1800 -> avg cost 180/pc
+  assert.equal(Number(patchDiscRes.body.items[0].line_subtotal), 1800);
+
+  // 3. Approve and receive-stock -> verify weighted avg cost uses discounted line_subtotal (1800 / 10 = 180)
+  const approveRes = await request(app)
+    .post(`/api/purchases/${createdId}/approve`)
+    .set('Cookie', adminCookie)
+    .send({ action: 'APPROVE' });
+  assert.equal(approveRes.status, 200);
+
+  const stockRes = await request(app)
+    .post(`/api/purchases/${createdId}/receive-stock`)
+    .set('Cookie', staffCookie)
+    .send({});
+  assert.equal(stockRes.status, 200);
+
+  const checkProd = await testPool.query(
+    'SELECT current_stock, avg_purchase_price FROM products WHERE id = $1',
+    [productId]
+  );
+  assert.equal(Number(checkProd.rows[0].current_stock), 10);
+  assert.equal(Number(checkProd.rows[0].avg_purchase_price), 180);
+
+  // 4. POST & PATCH single-amount + discount_amount
+  const createSingleRes = await request(app)
+    .post('/api/purchases')
+    .set('Cookie', staffCookie)
+    .send({
+      vendor_id: vendorId,
+      product_summary: 'Quick Discounted Entry',
+      purchase_date_ad: '2026-11-14',
+      purchase_date_bs: '2083-07-28',
+      fiscal_year: '2083/84',
+      tax_type: 'VAT_13',
+      vat_calc_mode: 'EXCLUSIVE',
+      entered_amount: 1000,
+      discount_amount: 100,
+    });
+  assert.equal(createSingleRes.status, 201);
+  assert.equal(createSingleRes.body.purchase.discount_amount, 100);
+  assert.equal(createSingleRes.body.purchase.entered_amount, 900);
+  assert.equal(createSingleRes.body.purchase.purchase_amount, 900);
+  assert.equal(createSingleRes.body.purchase.vat_amount, 117);
+  assert.equal(createSingleRes.body.purchase.total_amount, 1017);
+
+  const singleId = Number(createSingleRes.body.purchase.id);
+  const patchSingleRes = await request(app)
+    .patch(`/api/purchases/${singleId}`)
+    .set('Cookie', staffCookie)
+    .send({ discount_amount: 200 });
+  assert.equal(patchSingleRes.status, 200);
+  // Gross stays 900 + 100 = 1000 -> minus new 200 = 800
+  assert.equal(patchSingleRes.body.purchase.discount_amount, 200);
+  assert.equal(patchSingleRes.body.purchase.entered_amount, 800);
+  assert.equal(patchSingleRes.body.purchase.purchase_amount, 800);
+  assert.equal(patchSingleRes.body.purchase.vat_amount, 104);
+  assert.equal(patchSingleRes.body.purchase.total_amount, 904);
 });

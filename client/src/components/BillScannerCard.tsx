@@ -336,6 +336,16 @@ export function BillScannerCard({
           </div>
 
           <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[11px] text-slate-700 font-mono">
+            {scanResult.extracted.subtotal_before_discount !== null && (
+              <span>
+                Printed Subtotal: <strong>{formatNpr(scanResult.extracted.subtotal_before_discount)}</strong>
+              </span>
+            )}
+            {scanResult.extracted.discount_amount > 0 && (
+              <span className="text-amber-700">
+                Discount: <strong>- {formatNpr(scanResult.extracted.discount_amount)}</strong>
+              </span>
+            )}
             {scanResult.extracted.taxable_amount !== null && (
               <span>
                 Printed Taxable: <strong>{formatNpr(scanResult.extracted.taxable_amount)}</strong>
