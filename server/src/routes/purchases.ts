@@ -112,6 +112,52 @@ function formatPurchaseItem(item: any) {
   };
 }
 
+function applyPrintedRoundingOverride(params: {
+  taxType: 'VAT_13' | 'NON_VAT';
+  baseAmount: number;
+  calcVatAmount: number;
+  calcTotalAmount: number;
+  exactVatRaw: unknown;
+  exactTotalRaw: unknown;
+}): { vatAmount: number; totalAmount: number } {
+  const hasExactVat =
+    params.exactVatRaw !== undefined &&
+    params.exactVatRaw !== null &&
+    String(params.exactVatRaw).trim() !== '';
+  const hasExactTotal =
+    params.exactTotalRaw !== undefined &&
+    params.exactTotalRaw !== null &&
+    String(params.exactTotalRaw).trim() !== '';
+
+  if (!hasExactVat && !hasExactTotal) {
+    return { vatAmount: params.calcVatAmount, totalAmount: params.calcTotalAmount };
+  }
+
+  const nextVat = hasExactVat ? Number(params.exactVatRaw) : params.calcVatAmount;
+  const nextTotal = hasExactTotal ? Number(params.exactTotalRaw) : params.calcTotalAmount;
+
+  if (Number.isNaN(nextVat) || Number.isNaN(nextTotal) || nextVat < 0 || nextTotal < 0) {
+    throw ApiError.badRequest('Exact printed VAT and total amounts must be non-negative numbers.');
+  }
+  if (params.taxType === 'NON_VAT' && nextVat > 0) {
+    throw ApiError.badRequest('Non-VAT purchases cannot have a non-zero VAT override.');
+  }
+  if (
+    Math.abs(nextVat - params.calcVatAmount) > 5 ||
+    Math.abs(nextTotal - params.calcTotalAmount) > 5 ||
+    Math.abs(nextTotal - (params.baseAmount + nextVat)) > 5
+  ) {
+    throw ApiError.badRequest(
+      'Exact printed VAT/total override differs too much from calculated tax formula (max ±Rs. 5.00 rounding allowance).'
+    );
+  }
+
+  return {
+    vatAmount: Number(nextVat.toFixed(2)),
+    totalAmount: Number(nextTotal.toFixed(2)),
+  };
+}
+
 function formatVatBill(bill: any) {
   return {
     ...bill,
@@ -704,8 +750,16 @@ purchasesRouter.post(
       const discountAmount = Number(financialCalc.discountAmount);
       const enteredAmount = Number(financialCalc.enteredAmount);
       const purchaseAmount = Number(financialCalc.purchaseAmount);
-      const vatAmount = Number(financialCalc.vatAmount);
-      const totalAmount = Number(financialCalc.totalAmount);
+      const overridden = applyPrintedRoundingOverride({
+        taxType,
+        baseAmount: purchaseAmount,
+        calcVatAmount: Number(financialCalc.vatAmount),
+        calcTotalAmount: Number(financialCalc.totalAmount),
+        exactVatRaw: body.exact_vat_amount ?? body.exactVatAmount,
+        exactTotalRaw: body.exact_total_amount ?? body.exactTotalAmount,
+      });
+      const vatAmount = overridden.vatAmount;
+      const totalAmount = overridden.totalAmount;
 
       // Initial Statuses
       const reviewStatus = 'PENDING_REVIEW';
@@ -1262,6 +1316,19 @@ purchasesRouter.patch(
           } catch (err: any) {
             throw ApiError.badRequest(err?.message || 'Invalid discount amount.');
           }
+        }
+
+        if (!isFinanciallyLocked) {
+          const overridden = applyPrintedRoundingOverride({
+            taxType,
+            baseAmount: purchaseAmount,
+            calcVatAmount: vatAmount,
+            calcTotalAmount: totalAmount,
+            exactVatRaw: body.exact_vat_amount ?? body.exactVatAmount,
+            exactTotalRaw: body.exact_total_amount ?? body.exactTotalAmount,
+          });
+          vatAmount = overridden.vatAmount;
+          totalAmount = overridden.totalAmount;
         }
 
         const productSummary = (body.product_summary ?? body.productSummary)?.trim() || current.product_summary;

@@ -30,12 +30,13 @@ export interface BillScannerCardProps {
   scanResult: BillExtractionResponse | null;
   isEdit: boolean;
   calculatedTotalAmount: number;
-  useLineItems: boolean;
+  isExactPrintedApplied?: boolean;
   isFinanciallyLocked: boolean;
   onFileSelected: (file: File) => void;
   onClearFile: () => void;
   onRescan: () => void;
   onUsePrintedTotal?: () => void;
+  onResetExactPrinted?: () => void;
   onInvalidFile: (message: string) => void;
 }
 
@@ -100,12 +101,13 @@ export function BillScannerCard({
   scanResult,
   isEdit,
   calculatedTotalAmount,
-  useLineItems,
+  isExactPrintedApplied,
   isFinanciallyLocked,
   onFileSelected,
   onClearFile,
   onRescan,
   onUsePrintedTotal,
+  onResetExactPrinted,
   onInvalidFile,
 }: BillScannerCardProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -174,10 +176,10 @@ export function BillScannerCard({
   const hasRoundingDiff =
     Boolean(
       scanResult &&
-        useLineItems &&
+        !isExactPrintedApplied &&
         printedTotal !== null &&
         printedTotal !== undefined &&
-        Math.abs(calculatedTotalAmount - printedTotal) > 0.05
+        Math.abs(calculatedTotalAmount - printedTotal) > 0.005
     );
 
   const docTypeLabel =
@@ -378,6 +380,23 @@ export function BillScannerCard({
               >
                 Use Exact Printed Total
               </button>
+            </div>
+          )}
+
+          {isExactPrintedApplied && !isFinanciallyLocked && (
+            <div className="p-2.5 bg-emerald-100/70 border border-emerald-300 rounded-lg flex flex-wrap items-center justify-between gap-2 text-[11px] text-emerald-950">
+              <span>
+                Exact printed bill totals applied while keeping line items &amp; discount intact.
+              </span>
+              {onResetExactPrinted && (
+                <button
+                  type="button"
+                  onClick={onResetExactPrinted}
+                  className="px-2.5 py-1 bg-white border border-emerald-300 hover:bg-emerald-50 text-emerald-900 rounded-md text-[11px] font-semibold transition-colors cursor-pointer"
+                >
+                  Revert to Formula
+                </button>
+              )}
             </div>
           )}
 

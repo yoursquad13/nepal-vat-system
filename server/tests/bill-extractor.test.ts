@@ -442,3 +442,62 @@ test('POST /api/purchases, PATCH /api/purchases/:id, and receive-stock handle di
   assert.equal(patchSingleRes.body.purchase.vat_amount, 104);
   assert.equal(patchSingleRes.body.purchase.total_amount, 904);
 });
+
+test('POST and PATCH /api/purchases support exact printed totals alongside line items and discount without tampering', async () => {
+  const dreamyItems = [
+    { product_name: 'Veg cheeze pizza', quantity: 6, unit_price: 575.22 },
+    { product_name: 'Chicken pizza', quantity: 4, unit_price: 707.96 },
+    { product_name: 'Chicken sekuwa 1/2', quantity: 7, unit_price: 796.46 },
+    { product_name: 'Hot garlic wings', quantity: 5, unit_price: 442.47 },
+    { product_name: 'Fruit salad', quantity: 4, unit_price: 530.97 },
+    { product_name: 'Buff sukuti sadheko', quantity: 6, unit_price: 575.22 },
+    { product_name: 'Mix Keema Noodles', quantity: 8, unit_price: 353.98 },
+    { product_name: 'Pork sekuwa', quantity: 5, unit_price: 530.97 },
+    { product_name: 'Mutton dum biryani', quantity: 3, unit_price: 619.46 },
+  ];
+
+  // Valid seller-rounding override keeping all 9 line items + discount + exact printed totals
+  const createRes = await request(app)
+    .post('/api/purchases')
+    .set('Cookie', staffCookie)
+    .send({
+      vendor_id: vendorId,
+      product_summary: 'Dreamy Boutique Hotel Food Order',
+      purchase_date_ad: '2026-10-08',
+      purchase_date_bs: '2083-06-22',
+      fiscal_year: '2083/84',
+      tax_type: 'VAT_13',
+      vat_calc_mode: 'EXCLUSIVE',
+      entered_amount: 26991.09,
+      discount_amount: 3778.71,
+      exact_vat_amount: 3017.62,
+      exact_total_amount: 26230.0,
+      items: JSON.stringify(dreamyItems),
+    });
+
+  assert.equal(createRes.status, 201);
+  assert.equal(createRes.body.items.length, 9);
+  assert.equal(createRes.body.purchase.discount_amount, 3778.71);
+  assert.equal(createRes.body.purchase.entered_amount, 23212.38);
+  assert.equal(createRes.body.purchase.purchase_amount, 23212.38);
+  assert.equal(createRes.body.purchase.vat_amount, 3017.62);
+  assert.equal(createRes.body.purchase.total_amount, 26230);
+
+  // Reject excessive tampering beyond +/- Rs. 5 rounding allowance
+  const tamperRes = await request(app)
+    .post('/api/purchases')
+    .set('Cookie', staffCookie)
+    .send({
+      vendor_id: vendorId,
+      product_summary: 'Excessive Override Attempt',
+      purchase_date_ad: '2026-10-08',
+      purchase_date_bs: '2083-06-22',
+      fiscal_year: '2083/84',
+      tax_type: 'VAT_13',
+      vat_calc_mode: 'EXCLUSIVE',
+      entered_amount: 1000,
+      exact_vat_amount: 500,
+      exact_total_amount: 1500,
+    });
+  assert.equal(tamperRes.status, 400);
+});

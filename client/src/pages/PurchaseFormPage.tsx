@@ -118,10 +118,18 @@ export function PurchaseFormPage() {
   const [taxType, setTaxType] = useState<TaxType>('VAT_13');
   const [vatCalcMode, setVatCalcMode] = useState<VatCalcMode>('EXCLUSIVE');
 
-  // Entered amount (for quick entry without line items) & Bill Discount
+  // Entered amount (for quick entry without line items), Bill Discount, & Exact Printed Totals override
   const [enteredAmount, setEnteredAmount] = useState<string>('');
   const [discountAmount, setDiscountAmount] = useState<string>('');
   const [discountPercent, setDiscountPercent] = useState<string>('');
+  const [exactPrintedTotals, setExactPrintedTotals] = useState<{
+    grossBeforeDiscount: number;
+    discountAmount: number;
+    enteredAmount: number;
+    purchaseAmount: number;
+    vatAmount: number;
+    totalAmount: number;
+  } | null>(null);
 
   // Line items
   const [useLineItems, setUseLineItems] = useState<boolean>(false);
@@ -212,12 +220,59 @@ export function PurchaseFormPage() {
           setDiscountPercent(
             savedDiscount > 0 && grossItems > 0 ? ((savedDiscount / grossItems) * 100).toFixed(2) : ''
           );
+          try {
+            const formulaCheck = calculateDiscountedPurchase({
+              lineAmounts: items.map((it) => (Number(it.quantity) || 0) * (Number(it.unit_price) || 0)),
+              discountAmount: savedDiscount,
+              taxType: pur.tax_type,
+              mode: pur.vat_calc_mode,
+            });
+            if (
+              Math.abs(Number(pur.total_amount) - Number(formulaCheck.totalAmount)) > 0.005 ||
+              Math.abs(Number(pur.purchase_amount) - Number(formulaCheck.purchaseAmount)) > 0.005 ||
+              Math.abs(Number(pur.vat_amount) - Number(formulaCheck.vatAmount)) > 0.005
+            ) {
+              setExactPrintedTotals({
+                grossBeforeDiscount: Number((Number(pur.entered_amount) + savedDiscount).toFixed(2)),
+                discountAmount: savedDiscount,
+                enteredAmount: Number(pur.entered_amount),
+                purchaseAmount: Number(pur.purchase_amount),
+                vatAmount: Number(pur.vat_amount),
+                totalAmount: Number(pur.total_amount),
+              });
+            }
+          } catch {
+            // Keep default formula view if item check fails
+          }
         } else {
           const grossSingle = Number(pur.entered_amount || pur.total_amount || 0) + savedDiscount;
           setEnteredAmount(String(Number(grossSingle.toFixed(2))));
           setDiscountPercent(
             savedDiscount > 0 && grossSingle > 0 ? ((savedDiscount / grossSingle) * 100).toFixed(2) : ''
           );
+          try {
+            const formulaCheck = calculateDiscountedPurchase({
+              enteredAmount: grossSingle,
+              discountAmount: savedDiscount,
+              taxType: pur.tax_type,
+              mode: pur.vat_calc_mode,
+            });
+            if (
+              Math.abs(Number(pur.total_amount) - Number(formulaCheck.totalAmount)) > 0.005 ||
+              Math.abs(Number(pur.vat_amount) - Number(formulaCheck.vatAmount)) > 0.005
+            ) {
+              setExactPrintedTotals({
+                grossBeforeDiscount: Number(grossSingle.toFixed(2)),
+                discountAmount: savedDiscount,
+                enteredAmount: Number(pur.entered_amount),
+                purchaseAmount: Number(pur.purchase_amount),
+                vatAmount: Number(pur.vat_amount),
+                totalAmount: Number(pur.total_amount),
+              });
+            }
+          } catch {
+            // Keep default formula view
+          }
         }
 
         // Check financial lock
@@ -263,11 +318,13 @@ export function PurchaseFormPage() {
   );
 
   const handleTaxTypeChange = (nextTaxType: TaxType) => {
+    setExactPrintedTotals(null);
     setTaxType(nextTaxType);
     setLineItems((prev) => prev.map((it) => computeLineItemTotals(it, nextTaxType, vatCalcMode)));
   };
 
   const handleVatModeChange = (nextVatMode: VatCalcMode) => {
+    setExactPrintedTotals(null);
     setVatCalcMode(nextVatMode);
     setLineItems((prev) => prev.map((it) => computeLineItemTotals(it, taxType, nextVatMode)));
   };
@@ -275,6 +332,7 @@ export function PurchaseFormPage() {
   const applyExtractedBill = useCallback(
     (result: BillExtractionResponse) => {
       const { extracted, matched_vendor } = result;
+      setExactPrintedTotals(null);
 
       // 1. Vendor Selection / Pre-fill Quick Add Vendor
       if (!isFinanciallyLocked) {
@@ -507,6 +565,9 @@ export function PurchaseFormPage() {
 
   // Recalculate line item row VAT amounts
   const updateLineItem = (index: number, field: keyof FormLineItem, value: any) => {
+    if (field === 'quantity' || field === 'unit_price') {
+      setExactPrintedTotals(null);
+    }
     setLineItems((prev) => {
       const updated = [...prev];
       const item = { ...updated[index], [field]: value };
@@ -522,6 +583,7 @@ export function PurchaseFormPage() {
   };
 
   const addLineItemRow = () => {
+    setExactPrintedTotals(null);
     setLineItems((prev) => [
       ...prev,
       {
@@ -540,12 +602,14 @@ export function PurchaseFormPage() {
   };
 
   const removeLineItemRow = (index: number) => {
+    setExactPrintedTotals(null);
     setLineItems((prev) => prev.filter((_, idx) => idx !== index));
   };
 
   const handleSelectCatalogProduct = (index: number, productId: number) => {
     const prod = catalogProducts.find((p) => p.id === productId);
     if (!prod) return;
+    setExactPrintedTotals(null);
 
     setLineItems((prev) => {
       const updated = [...prev];
@@ -581,6 +645,7 @@ export function PurchaseFormPage() {
   }, [useLineItems, lineItems, enteredAmount]);
 
   const handleDiscountAmountChange = (rawVal: string) => {
+    setExactPrintedTotals(null);
     setDiscountAmount(rawVal);
     const num = Number(rawVal);
     if (!rawVal.trim() || Number.isNaN(num) || num <= 0) {
@@ -595,6 +660,7 @@ export function PurchaseFormPage() {
   };
 
   const handleDiscountPercentChange = (rawVal: string) => {
+    setExactPrintedTotals(null);
     setDiscountPercent(rawVal);
     const pct = Number(rawVal);
     if (!rawVal.trim() || Number.isNaN(pct) || pct <= 0) {
@@ -621,6 +687,20 @@ export function PurchaseFormPage() {
         mode: vatCalcMode,
       });
 
+      if (exactPrintedTotals) {
+        return {
+          grossBeforeDiscount: exactPrintedTotals.grossBeforeDiscount,
+          discountAmount: exactPrintedTotals.discountAmount,
+          enteredAmount: exactPrintedTotals.enteredAmount,
+          baseAmount: exactPrintedTotals.purchaseAmount,
+          vatAmount: exactPrintedTotals.vatAmount,
+          totalAmount: exactPrintedTotals.totalAmount,
+          itemBreakdown: res.items,
+          discountError: null as string | null,
+          isExactPrintedApplied: true,
+        };
+      }
+
       return {
         grossBeforeDiscount: Number((res.grossEnteredPaisa / 100).toFixed(2)),
         discountAmount: Number(res.discountAmount),
@@ -630,6 +710,7 @@ export function PurchaseFormPage() {
         totalAmount: Number(res.totalAmount),
         itemBreakdown: res.items,
         discountError: null as string | null,
+        isExactPrintedApplied: false,
       };
     } catch (err: any) {
       return {
@@ -641,9 +722,78 @@ export function PurchaseFormPage() {
         totalAmount: 0,
         itemBreakdown: [],
         discountError: err?.message || 'Invalid discount amount.',
+        isExactPrintedApplied: false,
       };
     }
-  }, [grossSubtotalBeforeDiscount, useLineItems, lineItems, enteredAmount, discountAmount, taxType, vatCalcMode]);
+  }, [
+    grossSubtotalBeforeDiscount,
+    useLineItems,
+    lineItems,
+    enteredAmount,
+    discountAmount,
+    taxType,
+    vatCalcMode,
+    exactPrintedTotals,
+  ]);
+
+  const handleUseExactPrintedTotal = () => {
+    if (!scanResult?.extracted) return;
+    const ext = scanResult.extracted;
+    const extDisc = Number(ext.discount_amount || 0);
+    const gross =
+      ext.subtotal_before_discount !== null && ext.subtotal_before_discount !== undefined
+        ? Number(ext.subtotal_before_discount)
+        : ext.entered_amount !== null && ext.entered_amount !== undefined
+        ? Number((ext.entered_amount + extDisc).toFixed(2))
+        : calculationSummary.grossBeforeDiscount;
+
+    if (extDisc > 0) {
+      setDiscountAmount(String(extDisc));
+      if (ext.discount_percent !== null && ext.discount_percent !== undefined) {
+        setDiscountPercent(String(ext.discount_percent));
+      } else if (gross > 0) {
+        setDiscountPercent(((extDisc / gross) * 100).toFixed(2));
+      }
+    }
+
+    if (gross > 0) {
+      setEnteredAmount(String(gross));
+    }
+
+    const fallbackCalc = calculateDiscountedPurchase({
+      enteredAmount: gross,
+      discountAmount: extDisc,
+      taxType,
+      mode: vatCalcMode,
+    });
+    const targetNet =
+      ext.entered_amount !== null && ext.entered_amount !== undefined
+        ? Number(ext.entered_amount)
+        : Number(fallbackCalc.enteredAmount);
+    const targetBase =
+      ext.taxable_amount !== null && ext.taxable_amount !== undefined
+        ? Number(ext.taxable_amount)
+        : Number(fallbackCalc.purchaseAmount);
+    const targetVat =
+      taxType === 'NON_VAT'
+        ? 0
+        : ext.vat_amount !== null && ext.vat_amount !== undefined
+        ? Number(ext.vat_amount)
+        : Number(fallbackCalc.vatAmount);
+    const targetTotal =
+      ext.total_amount !== null && ext.total_amount !== undefined
+        ? Number(ext.total_amount)
+        : Number(fallbackCalc.totalAmount);
+
+    setExactPrintedTotals({
+      grossBeforeDiscount: Number(gross.toFixed(2)),
+      discountAmount: Number(extDisc.toFixed(2)),
+      enteredAmount: Number(targetNet.toFixed(2)),
+      purchaseAmount: Number(targetBase.toFixed(2)),
+      vatAmount: Number(targetVat.toFixed(2)),
+      totalAmount: Number(targetTotal.toFixed(2)),
+    });
+  };
 
   // Selected Vendor object
   const currentVendor = useMemo(() => {
@@ -752,8 +902,17 @@ export function PurchaseFormPage() {
               unit_of_measurement: it.unit_of_measurement,
               unit_price: it.unit_price,
             }));
+            if (exactPrintedTotals) {
+              patchData.entered_amount = exactPrintedTotals.grossBeforeDiscount;
+              patchData.exact_vat_amount = exactPrintedTotals.vatAmount;
+              patchData.exact_total_amount = exactPrintedTotals.totalAmount;
+            }
           } else {
             patchData.entered_amount = Number(enteredAmount);
+            if (exactPrintedTotals) {
+              patchData.exact_vat_amount = exactPrintedTotals.vatAmount;
+              patchData.exact_total_amount = exactPrintedTotals.totalAmount;
+            }
           }
         }
 
@@ -807,8 +966,17 @@ export function PurchaseFormPage() {
             unit_price: it.unit_price,
           }));
           formData.append('items', JSON.stringify(itemsPayload));
+          if (exactPrintedTotals) {
+            formData.append('entered_amount', String(exactPrintedTotals.grossBeforeDiscount));
+            formData.append('exact_vat_amount', String(exactPrintedTotals.vatAmount));
+            formData.append('exact_total_amount', String(exactPrintedTotals.totalAmount));
+          }
         } else {
           formData.append('entered_amount', String(enteredAmount));
+          if (exactPrintedTotals) {
+            formData.append('exact_vat_amount', String(exactPrintedTotals.vatAmount));
+            formData.append('exact_total_amount', String(exactPrintedTotals.totalAmount));
+          }
         }
 
         if (vatBillFile) {
@@ -885,21 +1053,17 @@ export function PurchaseFormPage() {
           scanResult={scanResult}
           isEdit={isEdit}
           calculatedTotalAmount={calculationSummary.totalAmount}
-          useLineItems={useLineItems}
+          isExactPrintedApplied={calculationSummary.isExactPrintedApplied}
           isFinanciallyLocked={isFinanciallyLocked}
           onFileSelected={handleBillFileSelected}
           onClearFile={handleClearBillFile}
           onRescan={() => vatBillFile && void runBillScan(vatBillFile)}
           onUsePrintedTotal={
-            scanResult?.extracted?.entered_amount
-              ? () => {
-                  setUseLineItems(false);
-                  setEnteredAmount(String(scanResult.extracted.entered_amount));
-                  setDiscountAmount('');
-                  setDiscountPercent('');
-                }
+            scanResult?.extracted?.total_amount !== null && scanResult?.extracted?.total_amount !== undefined
+              ? handleUseExactPrintedTotal
               : undefined
           }
+          onResetExactPrinted={() => setExactPrintedTotals(null)}
           onInvalidFile={(msg) => toastError(msg, 'Invalid Bill File')}
         />
 
@@ -1261,10 +1425,17 @@ export function PurchaseFormPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    if (!useLineItems && lineItems.length === 0) {
-                      addLineItemRow();
+                    if (useLineItems) {
+                      if (!enteredAmount && calculationSummary.grossBeforeDiscount > 0) {
+                        setEnteredAmount(String(calculationSummary.grossBeforeDiscount));
+                      }
+                      setUseLineItems(false);
+                    } else {
+                      if (lineItems.length === 0) {
+                        addLineItemRow();
+                      }
+                      setUseLineItems(true);
                     }
-                    setUseLineItems(!useLineItems);
                   }}
                   className="px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-100 text-slate-800 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
                 >
@@ -1281,7 +1452,11 @@ export function PurchaseFormPage() {
                 {taxType === 'NON_VAT'
                   ? 'Total Purchase Amount (NPR)'
                   : vatCalcMode === 'EXCLUSIVE'
-                  ? 'Taxable Purchase Amount (Exclusive of 13% VAT)'
+                  ? Number(discountAmount) > 0
+                    ? 'Subtotal Before Discount (Exclusive of 13% VAT)'
+                    : 'Taxable Purchase Amount (Exclusive of 13% VAT)'
+                  : Number(discountAmount) > 0
+                  ? 'Subtotal Before Discount (Inclusive of 13% VAT)'
                   : 'Invoice Gross Amount (Inclusive of 13% VAT)'}{' '}
                 <span className="text-rose-500">*</span>
               </label>
@@ -1296,7 +1471,10 @@ export function PurchaseFormPage() {
                   placeholder="0.00"
                   disabled={isFinanciallyLocked}
                   value={enteredAmount}
-                  onChange={(e) => setEnteredAmount(e.target.value)}
+                  onChange={(e) => {
+                    setExactPrintedTotals(null);
+                    setEnteredAmount(e.target.value);
+                  }}
                   required={!useLineItems}
                   className="w-full pl-10 pr-3 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-sm font-bold font-mono text-slate-900 focus:bg-white focus:outline-emerald-600 tabular-nums"
                 />
@@ -1504,17 +1682,35 @@ export function PurchaseFormPage() {
 
           {/* Live VAT Calculation Breakdown Card */}
           <div className="bg-slate-900 text-white p-4 rounded-xl shadow-md space-y-3 font-mono">
-            <div className="flex items-center justify-between text-xs text-slate-400 border-b border-slate-800 pb-2">
-              <span className="font-semibold uppercase tracking-wider text-emerald-400">
-                Formula & Ledger Summary
-              </span>
-              <span>
-                {taxType === 'NON_VAT'
-                  ? 'NON-VAT 0%'
-                  : vatCalcMode === 'EXCLUSIVE'
-                  ? 'Base + (Base × 13%)'
-                  : 'Total × 13 / 113'}
-              </span>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400 border-b border-slate-800 pb-2">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold uppercase tracking-wider text-emerald-400">
+                  Formula & Ledger Summary
+                </span>
+                {calculationSummary.isExactPrintedApplied && (
+                  <span className="px-2 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-semibold">
+                    Exact Printed Totals Applied
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {calculationSummary.isExactPrintedApplied && !isFinanciallyLocked && (
+                  <button
+                    type="button"
+                    onClick={() => setExactPrintedTotals(null)}
+                    className="text-[11px] text-amber-300 hover:text-amber-200 underline cursor-pointer"
+                  >
+                    Reset to Formula
+                  </button>
+                )}
+                <span>
+                  {taxType === 'NON_VAT'
+                    ? 'NON-VAT 0%'
+                    : vatCalcMode === 'EXCLUSIVE'
+                    ? 'Base + (Base × 13%)'
+                    : 'Total × 13 / 113'}
+                </span>
+              </div>
             </div>
 
             {calculationSummary.discountAmount > 0 && (
