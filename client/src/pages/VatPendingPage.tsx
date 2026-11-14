@@ -131,9 +131,18 @@ export function VatPendingPage() {
     try {
       const fd = new FormData();
       fd.append('file', billFile);
-      if (billDateAd) fd.append('vat_bill_date_ad', billDateAd);
-      if (billDateBs) fd.append('vat_bill_date_bs', billDateBs);
-      if (billNumber.trim()) fd.append('bill_number', billNumber.trim());
+      if (billDateAd) {
+        fd.append('bill_date_ad', billDateAd);
+        fd.append('vat_bill_date_ad', billDateAd);
+      }
+      if (billDateBs) {
+        fd.append('bill_date_bs', billDateBs);
+        fd.append('vat_bill_date_bs', billDateBs);
+      }
+      if (billNumber.trim()) {
+        fd.append('vat_bill_number', billNumber.trim());
+        fd.append('bill_number', billNumber.trim());
+      }
 
       await api.purchases.uploadVatBill(uploadPurchase.id, fd);
       toastSuccess(`VAT bill attached to ${uploadPurchase.purchase_code}!`, 'VAT Bill Uploaded');

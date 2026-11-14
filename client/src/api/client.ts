@@ -276,6 +276,7 @@ export interface Purchase {
   bill_number: string | null;
   product_summary: string;
   description: string | null;
+  remarks?: string | null;
   entry_date_ad: string;
   entry_time_npt: string;
   entry_date_bs: string;
@@ -824,11 +825,47 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(data),
       }),
-    uploadVatBill: (id: number, formData: FormData) =>
-      apiFetch<{ message: string; vat_bill: VatBill; purchase: Purchase }>(`/api/purchases/${id}/vat-bill`, {
+    uploadVatBill: (
+      id: number,
+      body:
+        | FormData
+        | {
+            file: File;
+            bill_date_ad?: string | null;
+            bill_date_bs?: string | null;
+            vat_bill_number?: string | null;
+            [k: string]: any;
+          }
+    ) => {
+      let fd: FormData;
+      if (typeof FormData !== 'undefined' && body instanceof FormData) {
+        fd = body;
+        // Normalize server contract aliases
+        if (fd.has('vat_bill_date_ad') && !fd.has('bill_date_ad')) {
+          fd.append('bill_date_ad', String(fd.get('vat_bill_date_ad')));
+        }
+        if (fd.has('vat_bill_date_bs') && !fd.has('bill_date_bs')) {
+          fd.append('bill_date_bs', String(fd.get('vat_bill_date_bs')));
+        }
+        if (fd.has('bill_number') && !fd.has('vat_bill_number')) {
+          fd.append('vat_bill_number', String(fd.get('bill_number')));
+        }
+      } else {
+        fd = new FormData();
+        const obj = body as any;
+        if (obj.file) fd.append('file', obj.file);
+        const dateAd = obj.bill_date_ad ?? obj.billDateAd ?? obj.vat_bill_date_ad ?? obj.vatBillDateAd;
+        const dateBs = obj.bill_date_bs ?? obj.billDateBs ?? obj.vat_bill_date_bs ?? obj.vatBillDateBs;
+        const billNo = obj.vat_bill_number ?? obj.vatBillNumber ?? obj.bill_number ?? obj.billNumber;
+        if (dateAd) fd.append('bill_date_ad', String(dateAd));
+        if (dateBs) fd.append('bill_date_bs', String(dateBs));
+        if (billNo) fd.append('vat_bill_number', String(billNo));
+      }
+      return apiFetch<{ message: string; vat_bill: VatBill; purchase: Purchase }>(`/api/purchases/${id}/vat-bill`, {
         method: 'POST',
-        body: formData,
-      }),
+        body: fd,
+      });
+    },
     receiveStock: (id: number, data?: { item_ids?: number[]; responsible_staff_name?: string }) =>
       apiFetch<{ message: string; movements: any[]; items: PurchaseItem[] }>(`/api/purchases/${id}/receive-stock`, {
         method: 'POST',

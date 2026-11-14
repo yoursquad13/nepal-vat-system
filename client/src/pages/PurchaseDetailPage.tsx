@@ -140,9 +140,18 @@ export function PurchaseDetailPage() {
     try {
       const fd = new FormData();
       fd.append('file', billUploadFile);
-      if (billUploadDateAd) fd.append('vat_bill_date_ad', billUploadDateAd);
-      if (billUploadDateBs) fd.append('vat_bill_date_bs', billUploadDateBs);
-      if (billUploadNumber.trim()) fd.append('bill_number', billUploadNumber.trim());
+      if (billUploadDateAd) {
+        fd.append('bill_date_ad', billUploadDateAd);
+        fd.append('vat_bill_date_ad', billUploadDateAd);
+      }
+      if (billUploadDateBs) {
+        fd.append('bill_date_bs', billUploadDateBs);
+        fd.append('vat_bill_date_bs', billUploadDateBs);
+      }
+      if (billUploadNumber.trim()) {
+        fd.append('vat_bill_number', billUploadNumber.trim());
+        fd.append('bill_number', billUploadNumber.trim());
+      }
 
       await api.purchases.uploadVatBill(purchaseId, fd);
       toastSuccess('VAT bill was successfully attached to this purchase.', 'VAT Bill Uploaded');

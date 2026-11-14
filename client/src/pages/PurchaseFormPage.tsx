@@ -160,7 +160,7 @@ export function PurchaseFormPage() {
         setBillNumber(pur.bill_number || '');
         setProductSummary(pur.product_summary || '');
         setDescription(pur.description || '');
-        setRemarks(pur.admin_remarks || '');
+        setRemarks(pur.remarks || '');
         setPurchaseDateBs(pur.purchase_date_bs);
         setPurchaseDateAd(pur.purchase_date_ad);
         setFiscalYear(pur.fiscal_year);
@@ -440,9 +440,18 @@ export function PurchaseFormPage() {
         if (vatBillFile) {
           const fd = new FormData();
           fd.append('file', vatBillFile);
-          if (vatBillDateAd) fd.append('vat_bill_date_ad', vatBillDateAd);
-          if (vatBillDateBs) fd.append('vat_bill_date_bs', vatBillDateBs);
-          if (billNumber) fd.append('bill_number', billNumber);
+          if (vatBillDateAd) {
+            fd.append('bill_date_ad', vatBillDateAd);
+            fd.append('vat_bill_date_ad', vatBillDateAd);
+          }
+          if (vatBillDateBs) {
+            fd.append('bill_date_bs', vatBillDateBs);
+            fd.append('vat_bill_date_bs', vatBillDateBs);
+          }
+          if (billNumber) {
+            fd.append('vat_bill_number', billNumber);
+            fd.append('bill_number', billNumber);
+          }
           await api.purchases.uploadVatBill(purchaseId, fd);
         }
 
