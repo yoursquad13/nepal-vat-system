@@ -40,6 +40,7 @@ import {
 import { FilePreviewModal } from '../components/FilePreviewModal';
 import { PrintableVoucher } from '../components/PrintableVoucher';
 import { BsAdDatePicker, BsAdDateValue } from '../components/BsAdDatePicker';
+import { ApprovePurchaseModal } from '../components/ApprovePurchaseModal';
 
 export function PurchaseDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -75,8 +76,6 @@ export function PurchaseDetailPage() {
   // Admin Review Modal (Approve / Reject)
   const [adminActionModalOpen, setAdminActionModalOpen] = useState<boolean>(false);
   const [adminActionType, setAdminActionType] = useState<'APPROVE' | 'REJECT' | null>(null);
-  const [adminActionNotes, setAdminActionNotes] = useState<string>('');
-  const [processingAction, setProcessingAction] = useState<boolean>(false);
 
   // VAT Bill Verify / Reject Modal
   const [vatVerifyModalOpen, setVatVerifyModalOpen] = useState<boolean>(false);
@@ -179,30 +178,6 @@ export function PurchaseDetailPage() {
       toastError(err.message || 'Failed to receive stock into inventory.', 'Stock Receipt Error');
     } finally {
       setReceivingStock(false);
-    }
-  };
-
-  // Admin Approve / Reject Purchase Handler
-  const handleAdminReview = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!adminActionType || !purchaseId) return;
-
-    setProcessingAction(true);
-    try {
-      if (adminActionType === 'APPROVE') {
-        await api.purchases.approve(purchaseId, { admin_remarks: adminActionNotes });
-        toastSuccess(`Purchase ${purchase?.purchase_code} approved for payment processing.`, 'Purchase Approved');
-      } else {
-        await api.purchases.reject(purchaseId, { reason: adminActionNotes });
-        toastInfo(`Purchase ${purchase?.purchase_code} was marked as rejected.`, 'Purchase Rejected');
-      }
-      setAdminActionModalOpen(false);
-      setAdminActionNotes('');
-      fetchPurchaseDetails();
-    } catch (err: any) {
-      toastError(err.message || 'Failed to submit review decision.', 'Action Failed');
-    } finally {
-      setProcessingAction(false);
     }
   };
 
@@ -824,68 +799,14 @@ export function PurchaseDetailPage() {
         </div>
       )}
 
-      {/* Admin Review Decision Modal (Approve / Reject) */}
-      {adminActionModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-fade-in">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full p-6 animate-slide-up space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="font-bold text-slate-900 text-sm">
-                {adminActionType === 'APPROVE' ? 'Approve Purchase Entry' : 'Reject Purchase Entry'}
-              </h3>
-              <button
-                type="button"
-                onClick={() => setAdminActionModalOpen(false)}
-                className="text-slate-400 hover:text-slate-700"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleAdminReview} className="space-y-4">
-              <p className="text-xs text-slate-600">
-                {adminActionType === 'APPROVE'
-                  ? 'Approving this purchase authorizes vendor payment recording and unlocks inventory stock receipt.'
-                  : 'Rejecting this purchase will decline authorization. Please provide a clear reason for the audit trail.'}
-              </p>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  {adminActionType === 'APPROVE' ? 'Approval Remarks (Optional)' : 'Rejection Reason (Required)'}
-                </label>
-                <textarea
-                  rows={3}
-                  required={adminActionType === 'REJECT'}
-                  placeholder="Enter remarks..."
-                  value={adminActionNotes}
-                  onChange={(e) => setAdminActionNotes(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setAdminActionModalOpen(false)}
-                  className="px-4 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={processingAction}
-                  className={`px-4 py-1.5 text-white rounded-lg text-xs font-bold ${
-                    adminActionType === 'APPROVE'
-                      ? 'bg-emerald-600 hover:bg-emerald-700'
-                      : 'bg-rose-600 hover:bg-rose-700'
-                  }`}
-                >
-                  {processingAction ? 'Processing...' : adminActionType === 'APPROVE' ? 'Confirm Approval' : 'Confirm Rejection'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Admin Review Decision Modal (Approve + Optional Mark Paid / Reject) */}
+      <ApprovePurchaseModal
+        isOpen={adminActionModalOpen && Boolean(adminActionType)}
+        actionType={adminActionType || 'APPROVE'}
+        purchase={purchase}
+        onClose={() => setAdminActionModalOpen(false)}
+        onSuccess={fetchPurchaseDetails}
+      />
 
       {/* VAT Bill Verify / Reject Modal */}
       {vatVerifyModalOpen && (

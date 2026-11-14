@@ -403,8 +403,12 @@ export function VendorPaymentsPage() {
                             <CheckCircle2 className="w-3 h-3 text-emerald-600" />
                             Verified
                           </span>
+                        ) : v.received_vat_bills_count > 0 ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-50 text-sky-700 border border-sky-200">
+                            {v.received_vat_bills_count} Received
+                          </span>
                         ) : (
-                          <span className="text-[11px] text-slate-400 italic">None</span>
+                          <span className="text-[11px] text-slate-400 italic">No Bills</span>
                         )}
                       </td>
 

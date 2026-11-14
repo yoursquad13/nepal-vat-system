@@ -31,6 +31,7 @@ import {
 } from '../components/StatusBadges';
 import { FilePreviewModal } from '../components/FilePreviewModal';
 import { RecordPaymentModal } from '../components/RecordPaymentModal';
+import { ApprovePurchaseModal } from '../components/ApprovePurchaseModal';
 
 export function AdminReviewPage() {
   const { success: toastSuccess, error: toastError, info: toastInfo } = useToast();
@@ -70,8 +71,6 @@ export function AdminReviewPage() {
   const [entryModalOpen, setEntryModalOpen] = useState<boolean>(false);
   const [entryActionTarget, setEntryActionTarget] = useState<Purchase | null>(null);
   const [entryActionType, setEntryActionType] = useState<'APPROVE' | 'REJECT'>('APPROVE');
-  const [entryActionRemarks, setEntryActionRemarks] = useState<string>('');
-  const [entryActionSubmitting, setEntryActionSubmitting] = useState<boolean>(false);
 
   // Verify / Reject VAT Bill Modal
   const [vatBillModalOpen, setVatBillModalOpen] = useState<boolean>(false);
@@ -178,44 +177,6 @@ export function AdminReviewPage() {
       setPreviewOpen(true);
     } catch (err: any) {
       toastError(err.message || 'Unable to open VAT bill preview', 'Preview Error');
-    }
-  };
-
-  // Submit Approve / Reject Purchase Entry
-  const handleEntryActionSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!entryActionTarget) return;
-
-    if (entryActionType === 'REJECT' && !entryActionRemarks.trim()) {
-      toastError('Rejection reason is required.', 'Validation Error');
-      return;
-    }
-
-    setEntryActionSubmitting(true);
-    try {
-      if (entryActionType === 'APPROVE') {
-        await api.purchases.approve(entryActionTarget.id, {
-          admin_remarks: entryActionRemarks.trim() || undefined,
-        });
-        toastSuccess(`Purchase ${entryActionTarget.purchase_code} approved successfully.`, 'Entry Approved');
-      } else {
-        await api.purchases.reject(entryActionTarget.id, {
-          reason: entryActionRemarks.trim(),
-        });
-        toastInfo(`Purchase ${entryActionTarget.purchase_code} has been rejected.`, 'Entry Rejected');
-      }
-
-      setEntryModalOpen(false);
-      setEntryActionTarget(null);
-      setEntryActionRemarks('');
-      fetchQueue();
-      if (inspectPurchaseId === entryActionTarget.id) {
-        openInspect(entryActionTarget.id);
-      }
-    } catch (err: any) {
-      toastError(err.message || 'Failed to update purchase entry status', 'Action Failed');
-    } finally {
-      setEntryActionSubmitting(false);
     }
   };
 
@@ -589,7 +550,6 @@ export function AdminReviewPage() {
                                 onClick={() => {
                                   setEntryActionTarget(p);
                                   setEntryActionType('APPROVE');
-                                  setEntryActionRemarks('');
                                   setEntryModalOpen(true);
                                 }}
                                 title="Approve Entry"
@@ -603,7 +563,6 @@ export function AdminReviewPage() {
                                 onClick={() => {
                                   setEntryActionTarget(p);
                                   setEntryActionType('REJECT');
-                                  setEntryActionRemarks('');
                                   setEntryModalOpen(true);
                                 }}
                                 title="Reject Entry"
@@ -780,7 +739,6 @@ export function AdminReviewPage() {
                         onClick={() => {
                           setEntryActionTarget(inspectData.purchase);
                           setEntryActionType('APPROVE');
-                          setEntryActionRemarks('');
                           setEntryModalOpen(true);
                         }}
                         className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors inline-flex items-center gap-1.5 shadow-xs"
@@ -793,7 +751,6 @@ export function AdminReviewPage() {
                         onClick={() => {
                           setEntryActionTarget(inspectData.purchase);
                           setEntryActionType('REJECT');
-                          setEntryActionRemarks('');
                           setEntryModalOpen(true);
                         }}
                         className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold transition-colors inline-flex items-center gap-1.5 shadow-xs"
@@ -815,7 +772,6 @@ export function AdminReviewPage() {
                           setEntryActionType(
                             inspectData.purchase.review_status === 'APPROVED' ? 'REJECT' : 'APPROVE'
                           );
-                          setEntryActionRemarks('');
                           setEntryModalOpen(true);
                         }}
                         className="text-xs text-indigo-600 hover:text-indigo-800 font-semibold underline"
@@ -1080,108 +1036,22 @@ export function AdminReviewPage() {
         </div>
       )}
 
-      {/* ============================================================== */}
-      {/* Approve / Reject Purchase Entry Modal                          */}
-      {/* ============================================================== */}
-      {entryModalOpen && entryActionTarget && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-fade-in"
-          role="dialog"
-          aria-modal="true"
-          onClick={() => setEntryModalOpen(false)}
-        >
-          <div
-            className="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div
-              className={`px-6 py-4 text-white flex items-center justify-between ${
-                entryActionType === 'APPROVE' ? 'bg-emerald-600' : 'bg-rose-600'
-              }`}
-            >
-              <h3 className="text-base font-bold flex items-center gap-2">
-                {entryActionType === 'APPROVE' ? (
-                  <>
-                    <CheckCircle2 className="w-5 h-5" />
-                    <span>Approve Purchase Entry</span>
-                  </>
-                ) : (
-                  <>
-                    <XCircle className="w-5 h-5" />
-                    <span>Reject Purchase Entry</span>
-                  </>
-                )}
-              </h3>
-              <button
-                type="button"
-                onClick={() => setEntryModalOpen(false)}
-                className="p-1 rounded-lg text-white/80 hover:text-white hover:bg-white/20 transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleEntryActionSubmit} className="p-6 space-y-4">
-              <p className="text-xs text-slate-600">
-                You are about to {entryActionType.toLowerCase()} entry{' '}
-                <strong className="text-slate-900">{entryActionTarget.purchase_code}</strong> from vendor{' '}
-                <strong className="text-slate-900">{entryActionTarget.vendor_name}</strong> for total amount of{' '}
-                <strong className="text-slate-900 tabular-nums">
-                  {formatNPR(entryActionTarget.total_amount)}
-                </strong>
-                .
-              </p>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  {entryActionType === 'APPROVE'
-                    ? 'Admin Approval Remarks (Optional)'
-                    : 'Rejection Reason (Required)'}{' '}
-                  {entryActionType === 'REJECT' && <span className="text-rose-500">*</span>}
-                </label>
-                <textarea
-                  rows={3}
-                  required={entryActionType === 'REJECT'}
-                  value={entryActionRemarks}
-                  onChange={(e) => setEntryActionRemarks(e.target.value)}
-                  placeholder={
-                    entryActionType === 'APPROVE'
-                      ? 'e.g. Rate and delivery verified; approved for disbursement.'
-                      : 'e.g. Mismatched bill totals; please update line item prices.'
-                  }
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-emerald-600"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
-                <button
-                  type="button"
-                  onClick={() => setEntryModalOpen(false)}
-                  disabled={entryActionSubmitting}
-                  className="px-4 py-2 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-100 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={entryActionSubmitting || (entryActionType === 'REJECT' && !entryActionRemarks.trim())}
-                  className={`px-4 py-2 text-white rounded-lg text-xs font-bold transition-colors shadow-xs ${
-                    entryActionType === 'APPROVE'
-                      ? 'bg-emerald-600 hover:bg-emerald-700'
-                      : 'bg-rose-600 hover:bg-rose-700'
-                  }`}
-                >
-                  {entryActionSubmitting
-                    ? 'Processing...'
-                    : entryActionType === 'APPROVE'
-                    ? 'Confirm Approval'
-                    : 'Confirm Rejection'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Approve / Reject Purchase Entry Modal (with optional Mark Paid) */}
+      <ApprovePurchaseModal
+        isOpen={entryModalOpen}
+        actionType={entryActionType}
+        purchase={entryActionTarget}
+        onClose={() => {
+          setEntryModalOpen(false);
+          setEntryActionTarget(null);
+        }}
+        onSuccess={() => {
+          fetchQueue();
+          if (entryActionTarget && inspectPurchaseId === entryActionTarget.id) {
+            openInspect(entryActionTarget.id);
+          }
+        }}
+      />
 
       {/* ============================================================== */}
       {/* Verify / Reject VAT Bill Modal                                 */}
