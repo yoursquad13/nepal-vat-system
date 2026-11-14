@@ -325,6 +325,58 @@ test('Optional line items can be attached later via PATCH /api/purchases/:id', a
   assert.strictEqual(Number(item2.line_total), 5650);
 });
 
+test('POST and PATCH /api/purchases validate line item quantity > 0 and unit_price >= 0', async () => {
+  // POST with quantity <= 0
+  const postZeroQty = await request(app)
+    .post('/api/purchases')
+    .set('Cookie', staffCookie)
+    .send({
+      vendor_id: testVendorId,
+      product_summary: 'Zero Qty Test',
+      items: [{ product_name: 'Item 1', quantity: 0, unit_price: 100 }],
+    });
+  assert.strictEqual(postZeroQty.status, 400);
+
+  // POST with negative unit price
+  const postNegPrice = await request(app)
+    .post('/api/purchases')
+    .set('Cookie', staffCookie)
+    .send({
+      vendor_id: testVendorId,
+      product_summary: 'Negative Price Test',
+      items: [{ product_name: 'Item 1', quantity: 1, unit_price: -50 }],
+    });
+  assert.strictEqual(postNegPrice.status, 400);
+
+  // PATCH with quantity <= 0
+  const validPurchase = await request(app)
+    .post('/api/purchases')
+    .set('Cookie', staffCookie)
+    .send({
+      vendor_id: testVendorId,
+      product_summary: 'To Patch Test',
+      entered_amount: 1000,
+    });
+  assert.strictEqual(validPurchase.status, 201);
+  const pId = validPurchase.body.purchase.id;
+
+  const patchZeroQty = await request(app)
+    .patch(`/api/purchases/${pId}`)
+    .set('Cookie', staffCookie)
+    .send({
+      items: [{ product_name: 'Item 1', quantity: -2, unit_price: 50 }],
+    });
+  assert.strictEqual(patchZeroQty.status, 400);
+
+  const patchNegPrice = await request(app)
+    .patch(`/api/purchases/${pId}`)
+    .set('Cookie', staffCookie)
+    .send({
+      items: [{ product_name: 'Item 1', quantity: 2, unit_price: -10 }],
+    });
+  assert.strictEqual(patchNegPrice.status, 400);
+});
+
 // ==================== DELAYED VAT BILL UPLOAD & STREAMING ====================
 
 test('Delayed VAT bill upload transitions VAT BILL PENDING -> VAT BILL RECEIVED and streams securely', async () => {

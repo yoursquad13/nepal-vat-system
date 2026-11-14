@@ -352,15 +352,15 @@ async function generateReportData(
     }
 
     case 'vendor-purchases': {
-      const conditions: string[] = ['p.is_deleted = FALSE'];
+      const joinConditions: string[] = ['p.is_deleted = FALSE'];
       const params: any[] = [];
 
       if (filters.fromAd && filters.toAd) {
         params.push(filters.fromAd, filters.toAd);
-        conditions.push(`p.purchase_date_ad >= $${params.length - 1} AND p.purchase_date_ad <= $${params.length}`);
+        joinConditions.push(`p.purchase_date_ad >= $${params.length - 1} AND p.purchase_date_ad <= $${params.length}`);
       }
 
-      const where = `WHERE ${conditions.join(' AND ')}`;
+      const joinOn = joinConditions.length > 0 ? ` AND ${joinConditions.join(' AND ')}` : '';
       const query = `
         SELECT
           v.id AS vendor_id,
@@ -374,10 +374,10 @@ async function generateReportData(
           COALESCE(SUM(p.paid_amount), 0)::numeric(14,2) AS paid_amount,
           COALESCE(SUM(p.total_amount - p.paid_amount), 0)::numeric(14,2) AS outstanding_amount
         FROM vendors v
-        LEFT JOIN purchases p ON v.id = p.vendor_id AND p.is_deleted = FALSE
-        ${where}
+        LEFT JOIN purchases p ON v.id = p.vendor_id${joinOn}
+        WHERE v.is_active = TRUE
         GROUP BY v.id, v.company_name, v.pan_number, v.vat_number, v.contact_number
-        ORDER BY total_amount DESC
+        ORDER BY total_amount DESC, v.company_name ASC
       `;
       const res = await pool.query(query, params);
 

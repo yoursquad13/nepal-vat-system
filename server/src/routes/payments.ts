@@ -520,7 +520,7 @@ export async function getVendorSummaryHandler(
 
     const totalTotalAmount = Number(kpi.total_total_amount);
     const totalPaidAmount = Number(kpi.total_paid_amount);
-    const totalUnpaidAmount = Math.max(0, totalTotalAmount - totalPaidAmount);
+    const totalUnpaidAmount = Number(fromPaisa(Math.max(0, toPaisa(totalTotalAmount) - toPaisa(totalPaidAmount))));
 
     const summary = {
       total_purchases: Number(kpi.total_purchases),
@@ -568,7 +568,7 @@ export async function getVendorSummaryHandler(
         vat_amount: Number(row.vat_amount),
         total_amount: tot,
         paid_amount: paid,
-        unpaid_amount: Math.max(0, tot - paid),
+        unpaid_amount: Number(fromPaisa(Math.max(0, toPaisa(tot) - toPaisa(paid)))),
         pending_vat_bills_count: Number(row.pending_vat_bills_count),
         received_vat_bills_count: Number(row.received_vat_bills_count),
         verified_vat_bills_count: Number(row.verified_vat_bills_count),

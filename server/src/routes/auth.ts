@@ -86,7 +86,8 @@ authRouter.post(
 
 // POST /api/auth/logout
 authRouter.post('/logout', (_req: Request, res: Response): void => {
-  res.clearCookie(AUTH_COOKIE_NAME, { path: '/' });
+  const { maxAge: _maxAge, ...clearOpts } = getAuthCookieOptions();
+  res.clearCookie(AUTH_COOKIE_NAME, clearOpts);
   res.status(200).json({ success: true, message: 'Logged out successfully' });
 });
 

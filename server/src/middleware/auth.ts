@@ -47,7 +47,7 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
 
     let decoded: any;
     try {
-      decoded = jwt.verify(token, env.JWT_SECRET);
+      decoded = jwt.verify(token, env.JWT_SECRET, { algorithms: ['HS256'] });
     } catch {
       throw ApiError.unauthorized('Invalid or expired authentication token');
     }

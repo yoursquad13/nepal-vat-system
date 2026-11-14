@@ -72,15 +72,16 @@ vendorsRouter.get(
       let valIdx = 1;
 
       if (q) {
+        const escapedQ = q.replace(/[%_\\]/g, '\\$&');
         conditions.push(`(
-          v.company_name ILIKE $${valIdx} OR
-          v.pan_number ILIKE $${valIdx} OR
-          v.vat_number ILIKE $${valIdx} OR
-          v.contact_number ILIKE $${valIdx} OR
-          v.alt_contact_number ILIKE $${valIdx} OR
-          v.contact_person ILIKE $${valIdx}
+          v.company_name ILIKE $${valIdx} ESCAPE '\\' OR
+          v.pan_number ILIKE $${valIdx} ESCAPE '\\' OR
+          v.vat_number ILIKE $${valIdx} ESCAPE '\\' OR
+          v.contact_number ILIKE $${valIdx} ESCAPE '\\' OR
+          v.alt_contact_number ILIKE $${valIdx} ESCAPE '\\' OR
+          v.contact_person ILIKE $${valIdx} ESCAPE '\\'
         )`);
-        values.push(`%${q}%`);
+        values.push(`%${escapedQ}%`);
         valIdx++;
       }
 
@@ -351,9 +352,21 @@ vendorsRouter.get(
           pay.void_reason,
           pay.created_at,
           p.purchase_code,
-          p.bill_number
+          p.bill_number,
+          ps.id AS slip_id,
+          ps.file_name AS slip_file_name,
+          ps.original_name AS slip_original_name,
+          ps.mime_type AS slip_mime_type,
+          ps.file_size AS slip_file_size
         FROM payments pay
         JOIN purchases p ON p.id = pay.purchase_id
+        LEFT JOIN LATERAL (
+          SELECT id, file_name, original_name, mime_type, file_size
+          FROM payment_slips
+          WHERE payment_id = pay.id
+          ORDER BY id DESC
+          LIMIT 1
+        ) ps ON TRUE
         WHERE pay.vendor_id = $1
         ORDER BY pay.payment_date_ad DESC, pay.id DESC`,
         [vendorId]
@@ -366,6 +379,15 @@ vendorsRouter.get(
         vendor_id: Number(pay.vendor_id),
         amount: Number(pay.amount),
         recorded_by: pay.recorded_by ? Number(pay.recorded_by) : null,
+        slip: pay.slip_id
+          ? {
+              id: Number(pay.slip_id),
+              file_name: pay.slip_file_name,
+              original_name: pay.slip_original_name,
+              mime_type: pay.slip_mime_type,
+              file_size: Number(pay.slip_file_size),
+            }
+          : null,
       }));
 
       const vendor = {

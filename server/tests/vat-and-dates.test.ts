@@ -24,6 +24,8 @@ test('toPaisa converts numbers and strings to exact integer paisa with rounding'
   assert.strictEqual(toPaisa('100'), 10000);
   assert.strictEqual(toPaisa('100.50'), 10050);
   assert.strictEqual(toPaisa(' 100.55 '), 10055);
+  assert.strictEqual(toPaisa('1,13,000.00'), 11300000);
+  assert.strictEqual(toPaisa(' 1,000.50 '), 100050);
   assert.strictEqual(toPaisa(0), 0);
   assert.strictEqual(toPaisa('0'), 0);
   assert.strictEqual(toPaisa(-50.25), -5025);
@@ -37,6 +39,8 @@ test('fromPaisa formats integer paisa to 2-decimal string', () => {
   assert.strictEqual(fromPaisa(1150), '11.50');
   assert.strictEqual(fromPaisa(1150.44), '11.50');
   assert.strictEqual(fromPaisa(-1150.44), '-11.50');
+  assert.strictEqual(fromPaisa(-0.004), '0.00');
+  assert.strictEqual(fromPaisa(-0.1), '0.00');
   assert.strictEqual(fromPaisa(0), '0.00');
   assert.strictEqual(fromPaisa(-5025), '-50.25');
   assert.strictEqual(fromPaisa(5), '0.05');
@@ -128,7 +132,9 @@ test('formatNpr formats currency using standard South Asian grouping and Rs. pre
   assert.strictEqual(formatNpr(100), 'Rs. 100.00');
   assert.strictEqual(formatNpr(0), 'Rs. 0.00');
   assert.strictEqual(formatNpr('5000.5'), 'Rs. 5,000.50');
+  assert.strictEqual(formatNpr('1,13,000.00'), 'Rs. 1,13,000.00');
   assert.strictEqual(formatNpr(-5000), '-Rs. 5,000.00');
+  assert.strictEqual(formatNpr(-0.001), 'Rs. 0.00');
   assert.strictEqual(formatNpr('invalid'), 'Rs. 0.00');
 });
 
@@ -190,6 +196,10 @@ test('getFiscalYearFromBs handles Shrawan (month 4) boundary transition', () => 
   assert.strictEqual(getFiscalYearFromBs('2083-01-01'), '2082/83');
   assert.strictEqual(getFiscalYearFromBs('2083-03-32'), '2082/83');
   assert.strictEqual(getFiscalYearFromBs('2080-02-15'), '2079/80');
+
+  // Invalid months throw
+  assert.throws(() => getFiscalYearFromBs('2083-00-01'), /Invalid BS month: 0/);
+  assert.throws(() => getFiscalYearFromBs('2083-13-01'), /Invalid BS month: 13/);
 });
 
 test('getNowNpt returns exact NPT (UTC+5:45) date, time, BS date and fiscal year', () => {

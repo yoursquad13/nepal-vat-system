@@ -194,6 +194,13 @@ test('GET /api/vendors: Lists vendors and supports multi-field search (q)', asyn
   assert.strictEqual(searchPersonRes.status, 200);
   assert.strictEqual(searchPersonRes.body.vendors.length, 1);
   assert.strictEqual(searchPersonRes.body.vendors[0].company_name, 'Jagdamba Steels Pvt. Ltd.');
+
+  // 6. Search with wildcard % matches only literal characters, not everything
+  const searchWildcard = await request(app)
+    .get('/api/vendors?q=%')
+    .set('Cookie', staffCookie);
+  assert.strictEqual(searchWildcard.status, 200);
+  assert.strictEqual(searchWildcard.body.vendors.length, 0);
 });
 
 test('GET /api/vendors/:id: Returns full profile with summary KPIs, purchases, and payments history', async () => {
@@ -231,6 +238,7 @@ test('GET /api/vendors/:id: Returns full profile with summary KPIs, purchases, a
   assert.strictEqual(payments.length, 1);
   assert.strictEqual(Number(payments[0].amount), 81360);
   assert.strictEqual(payments[0].transaction_ref, 'NABIL-TRF-982341');
+  assert.ok('slip' in payments[0], 'Payment must have a slip property (null or object)');
 
   // Verify soft-deleted purchase exclusion:
   // Add a deleted purchase for vendor 1, check that it does not show up in summary or purchases
@@ -405,6 +413,13 @@ test('GET /api/products: Supports search (q), category, and stockStatus filters'
   assert.strictEqual(searchBrandRes.status, 200);
   assert.strictEqual(searchBrandRes.body.products.length, 1);
   assert.strictEqual(searchBrandRes.body.products[0].brand, 'Asian Paints');
+
+  // Search with wildcard % matches literal % only, not all products
+  const searchProductWildcard = await request(app)
+    .get('/api/products?q=%')
+    .set('Cookie', staffCookie);
+  assert.strictEqual(searchProductWildcard.status, 200);
+  assert.strictEqual(searchProductWildcard.body.products.length, 0);
 
   // 3. Filter by category
   const catRes = await request(app)

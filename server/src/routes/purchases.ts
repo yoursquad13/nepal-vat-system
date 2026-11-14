@@ -103,6 +103,22 @@ function formatVatBill(bill: any) {
   };
 }
 
+export function validatePurchaseLineItems(items: any[]): void {
+  if (!Array.isArray(items)) return;
+  for (const item of items) {
+    if (!item) continue;
+    const qty = item.quantity !== undefined && item.quantity !== null ? Number(item.quantity) : 1;
+    if (Number.isNaN(qty) || qty <= 0) {
+      throw ApiError.badRequest(`Invalid line item quantity: ${item.quantity}. Quantity must be greater than zero.`);
+    }
+    const rawPrice = item.unit_price ?? item.unitPrice;
+    const price = rawPrice !== undefined && rawPrice !== null ? Number(rawPrice) : 0;
+    if (Number.isNaN(price) || price < 0) {
+      throw ApiError.badRequest(`Invalid line item unit price: ${rawPrice}. Unit price cannot be negative.`);
+    }
+  }
+}
+
 // ==================== GET /api/purchases/vat-pending ====================
 // Note: Must be declared BEFORE /:id route
 purchasesRouter.get(
@@ -474,6 +490,8 @@ purchasesRouter.post(
         }
       }
 
+      validatePurchaseLineItems(rawItems);
+
       const vendorId = Number(body.vendor_id ?? body.vendorId);
       if (Number.isNaN(vendorId) || vendorId <= 0) {
         throw ApiError.badRequest('Valid vendor_id is required');
@@ -844,6 +862,20 @@ purchasesRouter.patch(
       }
 
       const body = req.body;
+
+      if (body.items !== undefined && body.items !== null) {
+        if (typeof body.items === 'string') {
+          try {
+            body.items = JSON.parse(body.items);
+          } catch {
+            throw ApiError.badRequest('Invalid JSON format for items array');
+          }
+        }
+        if (!Array.isArray(body.items)) {
+          throw ApiError.badRequest('items must be an array');
+        }
+        validatePurchaseLineItems(body.items);
+      }
 
       const result = await withTransaction(async (client) => {
         // Fetch current purchase with lock

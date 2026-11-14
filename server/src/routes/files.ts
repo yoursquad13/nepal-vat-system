@@ -18,7 +18,8 @@ const UPLOAD_ROOT = path.resolve(process.cwd(), env.UPLOAD_DIR || './uploads');
  */
 function resolveSafeFilePath(storagePath: string): string {
   const resolved = path.resolve(process.cwd(), storagePath);
-  if (!resolved.startsWith(UPLOAD_ROOT)) {
+  const safeRoot = UPLOAD_ROOT.endsWith(path.sep) ? UPLOAD_ROOT : UPLOAD_ROOT + path.sep;
+  if (!resolved.startsWith(safeRoot)) {
     throw ApiError.badRequest('Invalid file storage path');
   }
   if (!fs.existsSync(resolved)) {
@@ -65,6 +66,9 @@ filesRouter.get(
 
       const stream = fs.createReadStream(filePath);
       stream.on('error', (err) => next(err));
+      res.on('close', () => {
+        stream.destroy();
+      });
       stream.pipe(res);
     } catch (err) {
       next(err);
@@ -110,6 +114,9 @@ filesRouter.get(
 
       const stream = fs.createReadStream(filePath);
       stream.on('error', (err) => next(err));
+      res.on('close', () => {
+        stream.destroy();
+      });
       stream.pipe(res);
     } catch (err) {
       next(err);

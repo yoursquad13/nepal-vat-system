@@ -702,7 +702,7 @@ inventoryRouter.get(
             WHEN p.current_stock <= p.min_stock_level THEN 'LOW_STOCK'
             ELSE 'IN_STOCK'
           END AS stock_status,
-          ROUND((p.current_stock * p.avg_purchase_price)::numeric, 2) AS valuation
+          ROUND(GREATEST(0, (p.current_stock * p.avg_purchase_price))::numeric, 2) AS valuation
         FROM products p
         WHERE p.is_active = TRUE AND p.current_stock <= p.min_stock_level
         ORDER BY p.current_stock ASC, p.name ASC
@@ -724,7 +724,7 @@ inventoryRouter.get(
             WHEN p.current_stock <= p.min_stock_level THEN 'LOW_STOCK'
             ELSE 'IN_STOCK'
           END AS stock_status,
-          ROUND((p.current_stock * p.avg_purchase_price)::numeric, 2) AS valuation
+          ROUND(GREATEST(0, (p.current_stock * p.avg_purchase_price))::numeric, 2) AS valuation
         FROM products p
         WHERE p.is_active = TRUE
         ORDER BY p.name ASC

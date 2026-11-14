@@ -25,7 +25,7 @@ export interface CalculateVatResult {
  */
 export function toPaisa(amount: number | string): number {
   if (typeof amount === 'string') {
-    const trimmed = amount.trim();
+    const trimmed = amount.replace(/,/g, '').trim();
     if (trimmed === '') return 0;
     const num = Number(trimmed);
     if (Number.isNaN(num) || !Number.isFinite(num)) {
@@ -49,8 +49,8 @@ export function fromPaisa(paisa: number): string {
   if (!Number.isFinite(paisa) || Number.isNaN(paisa)) {
     return '0.00';
   }
-  const isNegative = paisa < 0;
   const absPaisa = Math.round(Math.abs(paisa));
+  const isNegative = paisa < 0 && absPaisa > 0;
   const rupees = Math.floor(absPaisa / 100);
   const remPaisa = absPaisa % 100;
   const formatted = `${rupees}.${remPaisa.toString().padStart(2, '0')}`;
@@ -117,11 +117,12 @@ export function calculateVat(params: CalculateVatParams): CalculateVatResult {
  * e.g., 113000 -> "Rs. 1,13,000.00"
  */
 export function formatNpr(amount: number | string): string {
-  const num = typeof amount === 'string' ? Number(amount.trim()) : Number(amount);
+  const num = typeof amount === 'string' ? Number(amount.replace(/,/g, '').trim()) : Number(amount);
   if (Number.isNaN(num) || !Number.isFinite(num)) {
     return 'Rs. 0.00';
   }
-  const isNegative = num < 0;
+  const absPaisa = Math.round(Math.abs(num) * 100);
+  const isNegative = num < 0 && absPaisa > 0;
   const absFormatted = new Intl.NumberFormat('en-IN', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,

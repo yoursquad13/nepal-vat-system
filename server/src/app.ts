@@ -62,7 +62,7 @@ export function createApp(): Express {
   app.use('/api/backups', backupsRouter);
 
   // Catch-all 404 for unmatched /api routes
-  app.all('/api/*', (_req, _res, next) => {
+  app.all(['/api', '/api/*'], (_req, _res, next) => {
     next(ApiError.notFound('API endpoint not found'));
   });
 

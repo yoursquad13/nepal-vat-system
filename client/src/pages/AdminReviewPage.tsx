@@ -836,7 +836,7 @@ export function AdminReviewPage() {
                   <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
                     Line Items ({inspectData.items.length})
                   </h4>
-                  <div className="border border-slate-200 rounded-xl overflow-hidden">
+                  <div className="border border-slate-200 rounded-xl overflow-x-auto">
                     <table className="w-full text-left text-xs">
                       <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
                         <tr>

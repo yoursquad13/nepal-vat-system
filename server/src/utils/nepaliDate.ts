@@ -265,6 +265,10 @@ export function getFiscalYearFromBs(bsDateStr: string): string {
   const bsYear = parseInt(yStr, 10);
   const bsMonth = parseInt(mStr, 10);
 
+  if (bsMonth < 1 || bsMonth > 12) {
+    throw new Error(`Invalid BS month: ${bsMonth}. Must be between 1 and 12.`);
+  }
+
   let startYear = bsYear;
   if (bsMonth < 4) {
     startYear = bsYear - 1;
@@ -294,6 +298,7 @@ export function getNowNpt(now?: Date): NowNpt {
     minute: '2-digit',
     second: '2-digit',
     hour12: false,
+    hourCycle: 'h23',
   });
   const timeNpt = timeFormatter.format(date);
 
@@ -375,7 +380,8 @@ export function resolveDatePreset(preset: DatePreset, refDate?: Date): DateRange
       }
       const fyEndYear = fyStartYear + 1;
       const startBs = `${fyStartYear}-04-01`;
-      const daysInAshadh = BS_MONTH_DAYS[fyEndYear][2]; // month index 2 is Asar/Ashadh
+      const safeEndYear = Math.min(2090, fyEndYear);
+      const daysInAshadh = BS_MONTH_DAYS[safeEndYear]?.[2] || 31;
       const endBs = `${fyEndYear}-03-${String(daysInAshadh).padStart(2, '0')}`;
       return { fromAd: bsToAd(startBs), toAd: bsToAd(endBs) };
     }

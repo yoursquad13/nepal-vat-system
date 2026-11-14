@@ -65,13 +65,14 @@ productsRouter.get(
       let valIdx = 1;
 
       if (q) {
+        const escapedQ = q.replace(/[%_\\]/g, '\\$&');
         conditions.push(`(
-          p.name ILIKE $${valIdx} OR
-          p.sku ILIKE $${valIdx} OR
-          p.category ILIKE $${valIdx} OR
-          p.brand ILIKE $${valIdx}
+          p.name ILIKE $${valIdx} ESCAPE '\\' OR
+          p.sku ILIKE $${valIdx} ESCAPE '\\' OR
+          p.category ILIKE $${valIdx} ESCAPE '\\' OR
+          p.brand ILIKE $${valIdx} ESCAPE '\\'
         )`);
-        values.push(`%${q}%`);
+        values.push(`%${escapedQ}%`);
         valIdx++;
       }
 
