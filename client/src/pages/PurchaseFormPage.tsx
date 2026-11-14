@@ -4,7 +4,6 @@ import {
   Receipt,
   Building2,
   Calendar,
-  Clock,
   Plus,
   Trash2,
   CheckCircle2,
@@ -768,19 +767,6 @@ export function PurchaseFormPage() {
             </p>
           </div>
         </div>
-      </div>
-
-      {/* Immutable Server Stamped Time Banner */}
-      <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between text-xs text-emerald-900 shadow-xs">
-        <div className="flex items-center gap-2">
-          <Clock className="w-4 h-4 text-emerald-700 shrink-0" />
-          <span>
-            Server automatically stamps immutable <strong>Nepal Standard Time (NPT: UTC+5:45)</strong> upon entry.
-          </span>
-        </div>
-        <span className="font-mono text-emerald-800 font-semibold hidden sm:inline-block">
-          FY {fiscalYear}
-        </span>
       </div>
 
       {/* Financial Lock Guard Notice (if editing approved/paid purchase) */}

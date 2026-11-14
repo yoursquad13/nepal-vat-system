@@ -31,12 +31,20 @@ export function Layout() {
   const [currentTimeNpt, setCurrentTimeNpt] = useState(() => getNowNpt());
   const location = useLocation();
 
-  // Update live clock every minute
+  // Update live NPT clock every second, aligned to the wall-clock second boundary
   useEffect(() => {
-    const timer = setInterval(() => {
+    let intervalId: ReturnType<typeof setInterval> | undefined;
+    const delayMs = 1000 - (Date.now() % 1000);
+    const timeoutId = setTimeout(() => {
       setCurrentTimeNpt(getNowNpt());
-    }, 30000);
-    return () => clearInterval(timer);
+      intervalId = setInterval(() => {
+        setCurrentTimeNpt(getNowNpt());
+      }, 1000);
+    }, delayMs);
+    return () => {
+      clearTimeout(timeoutId);
+      if (intervalId) clearInterval(intervalId);
+    };
   }, []);
 
   // Close mobile drawer on route change

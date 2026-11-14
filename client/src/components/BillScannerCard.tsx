@@ -191,19 +191,11 @@ export function BillScannerCard({
 
   return (
     <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
         <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
           <Upload className="w-4 h-4 text-emerald-600" />
           <span>Attach Physical VAT Bill / Tax Invoice</span>
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-            <Sparkles className="w-3 h-3" />
-            Gemini AI Auto-Fill (EN / नेपाली)
-          </span>
         </div>
-
-        <span className="text-[11px] text-slate-500">
-          Upload, drag & drop, or paste (<kbd className="px-1.5 py-0.5 bg-slate-100 border border-slate-300 rounded text-[10px] font-mono">Ctrl+V</kbd> / <kbd className="px-1.5 py-0.5 bg-slate-100 border border-slate-300 rounded text-[10px] font-mono">⌘V</kbd>)
-        </span>
       </div>
 
       <div
