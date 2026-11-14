@@ -3,6 +3,11 @@ import { AuthProvider, RequireAuth, RequireAdmin } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
 import { Layout } from './components/Layout';
 import { LoginPage } from './pages/LoginPage';
+import { DashboardPage } from './pages/DashboardPage';
+import { PurchasesPage } from './pages/PurchasesPage';
+import { PurchaseFormPage } from './pages/PurchaseFormPage';
+import { PurchaseDetailPage } from './pages/PurchaseDetailPage';
+import { VatPendingPage } from './pages/VatPendingPage';
 import { Construction } from 'lucide-react';
 
 /**
@@ -72,58 +77,14 @@ export default function App() {
               }
             >
               {/* Dashboard */}
-              <Route
-                index
-                element={
-                  <RoutePlaceholder
-                    title="Executive & Operational Dashboard"
-                    subtitle="Interactive Recharts, VAT KPIs, Low Stock Alerts, and Recent Entries."
-                    taskPhase="Task 12: Dashboard, Analytics & Final Polish"
-                  />
-                }
-              />
+              <Route index element={<DashboardPage />} />
 
               {/* Purchases Section */}
-              <Route
-                path="purchases"
-                element={
-                  <RoutePlaceholder
-                    title="Purchases Ledger & VAT Verification"
-                    subtitle="Filterable list with BS/AD dates, 13% VAT status, and payment tracking."
-                    taskPhase="Task 10: Purchases, VAT Workflow & Review Queue"
-                  />
-                }
-              />
-              <Route
-                path="purchases/new"
-                element={
-                  <RoutePlaceholder
-                    title="Add New Purchase Entry"
-                    subtitle="Live 13% inclusive/exclusive VAT calculator, dynamic items, and VAT bill upload."
-                    taskPhase="Task 10: Purchases, VAT Workflow & Review Queue"
-                  />
-                }
-              />
-              <Route
-                path="purchases/:id"
-                element={
-                  <RoutePlaceholder
-                    title="Purchase Details & Voucher"
-                    subtitle="Full bill breakdown, file preview lightbox, stock status, and audit history."
-                    taskPhase="Task 10: Purchases, VAT Workflow & Review Queue"
-                  />
-                }
-              />
-              <Route
-                path="vat-pending"
-                element={
-                  <RoutePlaceholder
-                    title="Aging VAT Pending Bills"
-                    subtitle="Aging tracker for unreceived VAT bills with vendor contact shortcuts."
-                    taskPhase="Task 10: Purchases, VAT Workflow & Review Queue"
-                  />
-                }
-              />
+              <Route path="purchases" element={<PurchasesPage />} />
+              <Route path="purchases/new" element={<PurchaseFormPage />} />
+              <Route path="purchases/:id" element={<PurchaseDetailPage />} />
+              <Route path="purchases/:id/edit" element={<PurchaseFormPage />} />
+              <Route path="vat-pending" element={<VatPendingPage />} />
 
               {/* Vendors Section */}
               <Route
