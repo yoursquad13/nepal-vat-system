@@ -66,10 +66,17 @@ export async function seedDatabase(options?: SeedOptions): Promise<void> {
 
     // 3. Optional Demo Data
     if (options?.withDemo) {
-      console.log('[seed] Seeding realistic Nepali demo data (vendors, products, purchases, stock)...');
+      const demoExistCheck = await client.query(
+        'SELECT id FROM products WHERE LOWER(sku) = LOWER($1)',
+        ['CEM-SHIVAM-OPC']
+      );
+      if (demoExistCheck.rows.length > 0) {
+        console.log('[seed] Demo data already present, skipping duplicate demo insert.');
+      } else {
+        console.log('[seed] Seeding realistic Nepali demo data (vendors, products, purchases, stock)...');
 
-      // Demo Vendors
-      const v1Res = await client.query(`
+        // Demo Vendors
+        const v1Res = await client.query(`
         INSERT INTO vendors (
           company_name, pan_number, vat_number, contact_person, contact_number,
           alt_contact_number, address, bank_name, bank_branch, bank_account_holder,
@@ -353,7 +360,8 @@ export async function seedDatabase(options?: SeedOptions): Promise<void> {
         ('PURCHASE', $2, 'CREATE', 'Initial purchase entry PUR-2083-0002 created', $4, 'Store Manager / Staff')
       `, [pur1Id, pur2Id, adminId, staffId]);
 
-      console.log('[seed] Demo data seeded successfully.');
+        console.log('[seed] Demo data seeded successfully.');
+      }
     }
 
     await client.query('COMMIT');

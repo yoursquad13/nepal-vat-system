@@ -11,6 +11,7 @@
     "build": "npm run build --workspaces",
     "start": "npm --workspace=server start",
     "test": "npm --workspace=server test",
+    "test:e2e": "tsx server/tests/e2e-live.ts",
     "db:migrate": "npm --workspace=server run db:migrate",
     "db:seed": "npm --workspace=server run db:seed"
   }

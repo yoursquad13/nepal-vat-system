@@ -27,6 +27,7 @@ export function createApp(): Express {
   app.use(
     helmet({
       contentSecurityPolicy: false, // Allows flexible static asset loading for SPA if needed
+      crossOriginResourcePolicy: { policy: 'cross-origin' }, // Allows /api/files/* previews inside iframes/img tags
     })
   );
 

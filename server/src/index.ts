@@ -1,4 +1,5 @@
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { app } from './app.js';
@@ -8,15 +9,22 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // In production, serve built client SPA assets
 if (env.NODE_ENV === 'production') {
-  const clientDistPath = path.resolve(__dirname, '../../client/dist');
-  app.use(express.static(clientDistPath));
+  let clientDistPath = path.resolve(__dirname, '../../client/dist');
+  if (!fs.existsSync(clientDistPath)) {
+    clientDistPath = path.resolve(process.cwd(), 'client/dist');
+  }
+  if (fs.existsSync(clientDistPath)) {
+    app.use(express.static(clientDistPath));
 
-  app.get('*', (req, res, next) => {
-    if (req.path.startsWith('/api')) {
-      return next();
-    }
-    res.sendFile(path.join(clientDistPath, 'index.html'));
-  });
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/api')) {
+        return next();
+      }
+      res.sendFile(path.join(clientDistPath, 'index.html'));
+    });
+  } else {
+    console.warn(`[server] Warning: Production mode enabled but client build not found at ${clientDistPath}`);
+  }
 }
 
 const server = app.listen(env.PORT, () => {
