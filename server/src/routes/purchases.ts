@@ -12,7 +12,8 @@ import {
   DatePreset,
 } from '../utils/nepaliDate.js';
 import { logActivity } from '../utils/audit.js';
-import { uploadVatBill } from '../utils/upload.js';
+import { uploadVatBill, uploadVatBillMemory } from '../utils/upload.js';
+import { extractPurchaseFromBill } from '../services/billExtractor.js';
 import { recordPaymentHandler, handlePaymentSlipUpload } from './payments.js';
 import { receivePurchaseStockHandler } from './inventory.js';
 
@@ -22,24 +23,42 @@ export const purchasesRouter = Router();
 purchasesRouter.use(requireAuth);
 
 /**
+ * Wraps a multer instance expecting either `vatBillFile` or `file` and normalizes it to `req.file`.
+ */
+function singleBillFieldMiddleware(
+  uploader: typeof uploadVatBill | typeof uploadVatBillMemory
+) {
+  return uploader.fields([
+    { name: 'vatBillFile', maxCount: 1 },
+    { name: 'file', maxCount: 1 },
+  ]);
+}
+
+function attachNormalizedBillFile(
+  uploader: typeof uploadVatBill | typeof uploadVatBillMemory,
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  singleBillFieldMiddleware(uploader)(req, res, (err) => {
+    if (err) return next(err);
+    const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
+    if (files?.vatBillFile?.[0]) {
+      req.file = files.vatBillFile[0];
+    } else if (files?.file?.[0]) {
+      req.file = files.file[0];
+    }
+    next();
+  });
+}
+
+/**
  * Middleware supporting both JSON and multipart/form-data for VAT bill upload on purchase creation.
  */
 function optionalVatBillUpload(req: Request, res: Response, next: NextFunction) {
   const contentType = req.headers['content-type'] || '';
   if (contentType.includes('multipart/form-data')) {
-    uploadVatBill.fields([
-      { name: 'vatBillFile', maxCount: 1 },
-      { name: 'file', maxCount: 1 },
-    ])(req, res, (err) => {
-      if (err) return next(err);
-      const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
-      if (files?.vatBillFile?.[0]) {
-        req.file = files.vatBillFile[0];
-      } else if (files?.file?.[0]) {
-        req.file = files.file[0];
-      }
-      next();
-    });
+    attachNormalizedBillFile(uploadVatBill, req, res, next);
   } else {
     next();
   }
@@ -118,6 +137,32 @@ export function validatePurchaseLineItems(items: any[]): void {
     }
   }
 }
+
+// ==================== POST /api/purchases/extract-bill ====================
+// Uses Gemini Vision to extract structured invoice fields from an uploaded bill image or PDF.
+purchasesRouter.post(
+  '/extract-bill',
+  (req, res, next) => attachNormalizedBillFile(uploadVatBillMemory, req, res, next),
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (!req.file) {
+        throw ApiError.badRequest(
+          'Please attach a VAT bill image or PDF (JPG, PNG, WEBP, PDF) to scan.'
+        );
+      }
+
+      const result = await extractPurchaseFromBill({
+        buffer: req.file.buffer,
+        mimeType: req.file.mimetype,
+        originalName: req.file.originalname,
+      });
+
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 // ==================== GET /api/purchases/vat-pending ====================
 // Note: Must be declared BEFORE /:id route

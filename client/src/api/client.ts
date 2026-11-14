@@ -314,6 +314,60 @@ export interface Purchase {
   activity_logs?: ActivityLog[];
 }
 
+export interface ExtractedBillVendor {
+  name: string;
+  name_english: string | null;
+  pan_number: string | null;
+  vat_number: string | null;
+  phone: string | null;
+  address: string | null;
+}
+
+export interface ExtractedBillLineItem {
+  name: string;
+  unit: string;
+  quantity: number;
+  unit_price: number;
+  line_total: number;
+}
+
+export interface ExtractedBillData {
+  document_type: 'TAX_INVOICE' | 'ABBREVIATED_TAX_INVOICE' | 'NON_VAT_BILL' | 'OTHER';
+  language: 'EN' | 'NE' | 'MIXED';
+  vendor: ExtractedBillVendor;
+  bill_number: string | null;
+  purchase_date_bs: string | null;
+  purchase_date_ad: string | null;
+  fiscal_year: string | null;
+  vat_bill_issue_date_bs: string | null;
+  vat_bill_issue_date_ad: string | null;
+  tax_type: TaxType;
+  vat_calc_mode: VatCalcMode;
+  payment_mode: string | null;
+  product_summary: string;
+  description: string | null;
+  remarks: string | null;
+  taxable_amount: number | null;
+  vat_amount: number | null;
+  total_amount: number | null;
+  entered_amount: number | null;
+  line_items: ExtractedBillLineItem[];
+  notes: string | null;
+}
+
+export interface BillExtractionResponse {
+  extracted: ExtractedBillData;
+  matched_vendor: {
+    id: number;
+    company_name: string;
+    pan_number: string | null;
+    vat_number: string | null;
+    match_reason: 'PAN_OR_VAT_MATCH' | 'NAME_MATCH';
+  } | null;
+  warnings: string[];
+  model: string;
+}
+
 export interface InventoryMovement {
   id: number;
   product_id: number;
@@ -799,6 +853,14 @@ export const api = {
         payments: Payment[];
         activity_logs: ActivityLog[];
       }>(`/api/purchases/${id}`),
+    extractBill: (file: File) => {
+      const fd = new FormData();
+      fd.append('file', file);
+      return apiFetch<BillExtractionResponse>('/api/purchases/extract-bill', {
+        method: 'POST',
+        body: fd,
+      });
+    },
     create: (body: FormData | Record<string, any>) => {
       const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
       return apiFetch<{

@@ -30,6 +30,8 @@ export const envSchema = z
     NODE_ENV: z
       .enum(['development', 'production', 'test'])
       .default('development'),
+    GEMINI_API_KEY: z.string().optional().default(''),
+    GEMINI_MODEL: z.string().default('gemini-3-flash-preview'),
   })
   .superRefine((data, ctx) => {
     if (data.NODE_ENV === 'production') {

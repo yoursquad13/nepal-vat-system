@@ -1,22 +1,21 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import {
   Receipt,
   Building2,
   Calendar,
   Clock,
-  Upload,
   Plus,
   Trash2,
-  AlertCircle,
   CheckCircle2,
-  FileText,
   Calculator,
   Lock,
   ArrowLeft,
   Search,
   X,
   PlusCircle,
+  Sparkles,
+  Loader2,
 } from 'lucide-react';
 import {
   api,
@@ -25,12 +24,19 @@ import {
   TaxType,
   VatCalcMode,
   AppSettings,
+  BillExtractionResponse,
+  ExtractedBillVendor,
 } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { calculateVat, formatNpr } from '../utils/money';
 import { getNowNpt } from '../utils/nepaliDate';
 import { BsAdDatePicker, BsAdDateValue } from '../components/BsAdDatePicker';
+import {
+  BillScannerCard,
+  extractFileFromClipboard,
+  normalizeBillFileInput,
+} from '../components/BillScannerCard';
 
 interface FormLineItem {
   id?: number;
@@ -98,11 +104,16 @@ export function PurchaseFormPage() {
   const [purchaseDateAd, setPurchaseDateAd] = useState<string>(todayNpt.dateAd);
   const [fiscalYear, setFiscalYear] = useState<string>(todayNpt.fiscalYear);
 
-  // VAT Bill file & Date
+  // VAT Bill file, AI scanner state & Date
   const [vatBillFile, setVatBillFile] = useState<File | null>(null);
   const [vatBillDateBs, setVatBillDateBs] = useState<string>(todayNpt.dateBs);
   const [vatBillDateAd, setVatBillDateAd] = useState<string>(todayNpt.dateAd);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isScanningBill, setIsScanningBill] = useState<boolean>(false);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [scanResult, setScanResult] = useState<BillExtractionResponse | null>(null);
+  const [unmatchedVendor, setUnmatchedVendor] = useState<ExtractedBillVendor | null>(null);
+  const [creatingExtractedVendor, setCreatingExtractedVendor] = useState<boolean>(false);
+  const scanRequestIdRef = useRef<number>(0);
 
   // Tax & VAT mode
   const [taxType, setTaxType] = useState<TaxType>('VAT_13');
@@ -217,6 +228,247 @@ export function PurchaseFormPage() {
       });
   }, [isEdit, purchaseId, toastError, navigate]);
 
+  const computeLineItemTotals = useCallback(
+    (item: FormLineItem, activeTaxType: TaxType, activeVatMode: VatCalcMode): FormLineItem => {
+      const qty = Number(item.quantity) || 0;
+      const price = Number(item.unit_price) || 0;
+      const calc = calculateVat({
+        enteredAmount: qty * price,
+        taxType: activeTaxType,
+        mode: activeVatMode,
+      });
+      return {
+        ...item,
+        line_subtotal: Number(calc.baseAmount),
+        line_vat_amount: Number(calc.vatAmount),
+        line_total: Number(calc.totalAmount),
+      };
+    },
+    []
+  );
+
+  const handleTaxTypeChange = (nextTaxType: TaxType) => {
+    setTaxType(nextTaxType);
+    setLineItems((prev) => prev.map((it) => computeLineItemTotals(it, nextTaxType, vatCalcMode)));
+  };
+
+  const handleVatModeChange = (nextVatMode: VatCalcMode) => {
+    setVatCalcMode(nextVatMode);
+    setLineItems((prev) => prev.map((it) => computeLineItemTotals(it, taxType, nextVatMode)));
+  };
+
+  const applyExtractedBill = useCallback(
+    (result: BillExtractionResponse) => {
+      const { extracted, matched_vendor } = result;
+
+      // 1. Vendor Selection / Pre-fill Quick Add Vendor
+      if (!isFinanciallyLocked) {
+        if (matched_vendor) {
+          setSelectedVendorId(matched_vendor.id);
+          setUnmatchedVendor(null);
+        } else {
+          setSelectedVendorId('');
+          setUnmatchedVendor(extracted.vendor);
+          const displayName = extracted.vendor.name_english || extracted.vendor.name || '';
+          const panOrVat = extracted.vendor.pan_number || extracted.vendor.vat_number || '';
+          setQuickVendorForm({
+            company_name: displayName,
+            pan_number: panOrVat,
+            vat_number: extracted.vendor.vat_number || panOrVat,
+            contact_person: '',
+            contact_number: extracted.vendor.phone || '',
+            address: extracted.vendor.address || '',
+          });
+        }
+      }
+
+      // 2. Invoice Reference, Summary & Notes
+      if (extracted.bill_number) setBillNumber(extracted.bill_number);
+      if (extracted.product_summary) setProductSummary(extracted.product_summary);
+      if (extracted.description) setDescription(extracted.description);
+      if (extracted.remarks) setRemarks(extracted.remarks);
+
+      // 3. Dates (BS + AD + Fiscal Year)
+      if (extracted.purchase_date_bs && extracted.purchase_date_ad) {
+        setPurchaseDateBs(extracted.purchase_date_bs);
+        setPurchaseDateAd(extracted.purchase_date_ad);
+        if (extracted.fiscal_year) {
+          setFiscalYear(extracted.fiscal_year);
+        }
+      }
+      if (extracted.vat_bill_issue_date_bs && extracted.vat_bill_issue_date_ad) {
+        setVatBillDateBs(extracted.vat_bill_issue_date_bs);
+        setVatBillDateAd(extracted.vat_bill_issue_date_ad);
+      } else if (extracted.purchase_date_bs && extracted.purchase_date_ad) {
+        setVatBillDateBs(extracted.purchase_date_bs);
+        setVatBillDateAd(extracted.purchase_date_ad);
+      }
+
+      // 4. Tax Mode, Amount & Line Items (only when financially editable)
+      if (!isFinanciallyLocked) {
+        const nextTaxType = extracted.tax_type;
+        const staffVatLocked =
+          user?.role === 'STAFF' && settings?.allow_staff_vat_mode_override === false;
+        const nextVatMode = staffVatLocked ? vatCalcMode : extracted.vat_calc_mode;
+
+        setTaxType(nextTaxType);
+        if (!staffVatLocked) {
+          setVatCalcMode(nextVatMode);
+        } else if (nextTaxType === 'VAT_13' && extracted.vat_calc_mode !== vatCalcMode) {
+          toastInfo(
+            `Company policy locks staff VAT mode to ${vatCalcMode}, while the bill appears to be ${extracted.vat_calc_mode}. Please verify amounts.`,
+            'VAT Mode Locked'
+          );
+        }
+
+        if (extracted.entered_amount && extracted.entered_amount > 0) {
+          setEnteredAmount(String(extracted.entered_amount));
+        }
+
+        if (extracted.line_items && extracted.line_items.length > 0) {
+          const mappedRows: FormLineItem[] = extracted.line_items.map((item) => {
+            const lowerItemName = item.name.toLowerCase();
+            const matchedProd = catalogProducts.find(
+              (p) =>
+                p.name.toLowerCase() === lowerItemName ||
+                (p.sku && lowerItemName.includes(p.sku.toLowerCase()))
+            );
+            return computeLineItemTotals(
+              {
+                product_id: matchedProd ? matchedProd.id : null,
+                product_name: item.name,
+                category: matchedProd?.category || '',
+                sku: matchedProd?.sku || '',
+                quantity: item.quantity > 0 ? item.quantity : 1,
+                unit_of_measurement: item.unit || matchedProd?.unit_of_measurement || 'pcs',
+                unit_price: item.unit_price >= 0 ? item.unit_price : 0,
+                line_subtotal: 0,
+                line_vat_amount: 0,
+                line_total: 0,
+              },
+              nextTaxType,
+              nextVatMode
+            );
+          });
+          setLineItems(mappedRows);
+          setUseLineItems(true);
+        } else if (extracted.entered_amount && extracted.entered_amount > 0) {
+          setUseLineItems(false);
+        }
+      }
+    },
+    [
+      isFinanciallyLocked,
+      user?.role,
+      settings?.allow_staff_vat_mode_override,
+      vatCalcMode,
+      catalogProducts,
+      computeLineItemTotals,
+      toastInfo,
+    ]
+  );
+
+  const runBillScan = useCallback(
+    async (targetFile: File) => {
+      const reqId = ++scanRequestIdRef.current;
+      setIsScanningBill(true);
+      setScanError(null);
+      try {
+        const result = await api.purchases.extractBill(targetFile);
+        if (scanRequestIdRef.current !== reqId) return;
+        setScanResult(result);
+        applyExtractedBill(result);
+        toastSuccess(
+          result.matched_vendor
+            ? `Auto-filled bill details & matched vendor "${result.matched_vendor.company_name}".`
+            : 'Bill details extracted and auto-filled. Verify vendor selection before saving.',
+          'Bill Read Successfully'
+        );
+      } catch (err: any) {
+        if (scanRequestIdRef.current !== reqId) return;
+        const msg = err?.message || 'Unable to extract details from this bill.';
+        setScanError(msg);
+        toastError(msg, 'AI Bill Scan Failed');
+      } finally {
+        if (scanRequestIdRef.current === reqId) {
+          setIsScanningBill(false);
+        }
+      }
+    },
+    [applyExtractedBill, toastSuccess, toastError]
+  );
+
+  const handleBillFileSelected = useCallback(
+    (selectedFile: File) => {
+      setVatBillFile(selectedFile);
+      setScanError(null);
+      setScanResult(null);
+      if (!isEdit) {
+        void runBillScan(selectedFile);
+      }
+    },
+    [isEdit, runBillScan]
+  );
+
+  const handleClearBillFile = () => {
+    scanRequestIdRef.current += 1;
+    setIsScanningBill(false);
+    setVatBillFile(null);
+    setScanError(null);
+    setScanResult(null);
+    setUnmatchedVendor(null);
+  };
+
+  // Global paste listener so Ctrl+V / Cmd+V anywhere on this page attaches and reads bill images
+  useEffect(() => {
+    const onWindowPaste = (e: ClipboardEvent) => {
+      const pasted = extractFileFromClipboard(e.clipboardData);
+      if (!pasted) return;
+      const { file: normalized, error } = normalizeBillFileInput(pasted);
+      if (error || !normalized) {
+        toastError(error || 'Unsupported pasted file type.', 'Paste Error');
+        return;
+      }
+      e.preventDefault();
+      handleBillFileSelected(normalized);
+    };
+    window.addEventListener('paste', onWindowPaste);
+    return () => window.removeEventListener('paste', onWindowPaste);
+  }, [handleBillFileSelected, toastError]);
+
+  const handleCreateExtractedVendorDirect = async () => {
+    if (!unmatchedVendor) return;
+    const companyName = (unmatchedVendor.name_english || unmatchedVendor.name || '').trim();
+    if (!companyName) return;
+
+    const panOrVat = unmatchedVendor.pan_number || unmatchedVendor.vat_number || null;
+    const extraNotes =
+      unmatchedVendor.name_english && unmatchedVendor.name !== unmatchedVendor.name_english
+        ? `Bill Name: ${unmatchedVendor.name}`
+        : null;
+
+    setCreatingExtractedVendor(true);
+    try {
+      const res = await api.vendors.create({
+        company_name: companyName,
+        pan_number: panOrVat,
+        vat_number: unmatchedVendor.vat_number || panOrVat,
+        contact_number: unmatchedVendor.phone || null,
+        address: unmatchedVendor.address || null,
+        notes: extraNotes,
+      });
+      const created = res.vendor;
+      setVendors((prev) => [created, ...prev]);
+      setSelectedVendorId(created.id);
+      setUnmatchedVendor(null);
+      toastSuccess(`${created.company_name} created and selected!`, 'Vendor Added');
+    } catch (err: any) {
+      toastError(err?.message || 'Could not create vendor automatically.', 'Vendor Creation Failed');
+    } finally {
+      setCreatingExtractedVendor(false);
+    }
+  };
+
   // Recalculate line item row VAT amounts
   const updateLineItem = (index: number, field: keyof FormLineItem, value: any) => {
     setLineItems((prev) => {
@@ -224,22 +476,11 @@ export function PurchaseFormPage() {
       const item = { ...updated[index], [field]: value };
 
       if (field === 'quantity' || field === 'unit_price') {
-        const qty = field === 'quantity' ? Number(value) || 0 : item.quantity;
-        const price = field === 'unit_price' ? Number(value) || 0 : item.unit_price;
-        const lineEntered = qty * price;
-
-        const calc = calculateVat({
-          enteredAmount: lineEntered,
-          taxType,
-          mode: vatCalcMode,
-        });
-
-        item.line_subtotal = Number(calc.baseAmount);
-        item.line_vat_amount = Number(calc.vatAmount);
-        item.line_total = Number(calc.totalAmount);
+        updated[index] = computeLineItemTotals(item, taxType, vatCalcMode);
+      } else {
+        updated[index] = item;
       }
 
-      updated[index] = item;
       return updated;
     });
   };
@@ -273,28 +514,21 @@ export function PurchaseFormPage() {
     setLineItems((prev) => {
       const updated = [...prev];
       const existing = updated[index];
-      const qty = existing.quantity || 1;
       const unitPrice = prod.latest_purchase_price || prod.avg_purchase_price || existing.unit_price || 0;
-      const lineEntered = qty * unitPrice;
 
-      const calc = calculateVat({
-        enteredAmount: lineEntered,
+      updated[index] = computeLineItemTotals(
+        {
+          ...existing,
+          product_id: prod.id,
+          product_name: prod.name,
+          category: prod.category || '',
+          sku: prod.sku || '',
+          unit_of_measurement: prod.unit_of_measurement || 'pcs',
+          unit_price: unitPrice,
+        },
         taxType,
-        mode: vatCalcMode,
-      });
-
-      updated[index] = {
-        ...existing,
-        product_id: prod.id,
-        product_name: prod.name,
-        category: prod.category || '',
-        sku: prod.sku || '',
-        unit_of_measurement: prod.unit_of_measurement || 'pcs',
-        unit_price: unitPrice,
-        line_subtotal: Number(calc.baseAmount),
-        line_vat_amount: Number(calc.vatAmount),
-        line_total: Number(calc.totalAmount),
-      };
+        vatCalcMode
+      );
       return updated;
     });
   };
@@ -359,6 +593,7 @@ export function PurchaseFormPage() {
       const newVendor = res.vendor;
       setVendors((prev) => [newVendor, ...prev]);
       setSelectedVendorId(newVendor.id);
+      setUnmatchedVendor(null);
       setQuickAddVendorOpen(false);
       setQuickVendorForm({
         company_name: '',
@@ -566,7 +801,31 @@ export function PurchaseFormPage() {
 
       {/* Main Form */}
       <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Section 1: Vendor & Bill Details */}
+        {/* Section 1: Upload / Drag-Drop / Paste VAT Bill & Gemini Auto-Fill */}
+        <BillScannerCard
+          file={vatBillFile}
+          isScanning={isScanningBill}
+          scanError={scanError}
+          scanResult={scanResult}
+          isEdit={isEdit}
+          calculatedTotalAmount={calculationSummary.totalAmount}
+          useLineItems={useLineItems}
+          isFinanciallyLocked={isFinanciallyLocked}
+          onFileSelected={handleBillFileSelected}
+          onClearFile={handleClearBillFile}
+          onRescan={() => vatBillFile && void runBillScan(vatBillFile)}
+          onUsePrintedTotal={
+            scanResult?.extracted?.entered_amount
+              ? () => {
+                  setUseLineItems(false);
+                  setEnteredAmount(String(scanResult.extracted.entered_amount));
+                }
+              : undefined
+          }
+          onInvalidFile={(msg) => toastError(msg, 'Invalid Bill File')}
+        />
+
+        {/* Section 2: Vendor & Bill Details */}
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs space-y-4">
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
             <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
@@ -584,6 +843,59 @@ export function PurchaseFormPage() {
               </button>
             )}
           </div>
+
+          {unmatchedVendor && !selectedVendorId && !isFinanciallyLocked && (
+            <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+              <div className="space-y-0.5 text-amber-950">
+                <div className="flex items-center gap-1.5 font-bold">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                  <span>
+                    New Supplier Detected:{' '}
+                    {unmatchedVendor.name_english
+                      ? `${unmatchedVendor.name_english}${
+                          unmatchedVendor.name !== unmatchedVendor.name_english
+                            ? ` (${unmatchedVendor.name})`
+                            : ''
+                        }`
+                      : unmatchedVendor.name}
+                  </span>
+                </div>
+                <p className="text-[11px] text-amber-800 font-mono">
+                  {[
+                    unmatchedVendor.pan_number || unmatchedVendor.vat_number
+                      ? `PAN/VAT: ${unmatchedVendor.pan_number || unmatchedVendor.vat_number}`
+                      : null,
+                    unmatchedVendor.address ? `Address: ${unmatchedVendor.address}` : null,
+                    unmatchedVendor.phone ? `Phone: ${unmatchedVendor.phone}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' • ') || 'Not matched to any saved vendor'}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setQuickAddVendorOpen(true)}
+                  className="px-2.5 py-1.5 bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer"
+                >
+                  Review & Edit
+                </button>
+                <button
+                  type="button"
+                  disabled={creatingExtractedVendor}
+                  onClick={handleCreateExtractedVendorDirect}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-lg text-[11px] font-bold transition-colors cursor-pointer"
+                >
+                  {creatingExtractedVendor ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <PlusCircle className="w-3.5 h-3.5" />
+                  )}
+                  <span>Create & Select Vendor</span>
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Vendor Selector Dropdown */}
@@ -791,7 +1103,7 @@ export function PurchaseFormPage() {
                 <button
                   type="button"
                   disabled={isFinanciallyLocked}
-                  onClick={() => setTaxType('VAT_13')}
+                  onClick={() => handleTaxTypeChange('VAT_13')}
                   className={`p-2.5 rounded-lg border text-xs font-semibold transition-all cursor-pointer ${
                     taxType === 'VAT_13'
                       ? 'bg-emerald-50 border-emerald-500 text-emerald-900 shadow-xs'
@@ -803,7 +1115,7 @@ export function PurchaseFormPage() {
                 <button
                   type="button"
                   disabled={isFinanciallyLocked}
-                  onClick={() => setTaxType('NON_VAT')}
+                  onClick={() => handleTaxTypeChange('NON_VAT')}
                   className={`p-2.5 rounded-lg border text-xs font-semibold transition-all cursor-pointer ${
                     taxType === 'NON_VAT'
                       ? 'bg-slate-800 border-slate-800 text-white shadow-xs'
@@ -825,7 +1137,7 @@ export function PurchaseFormPage() {
                   <button
                     type="button"
                     disabled={isFinanciallyLocked || (user?.role === 'STAFF' && settings?.allow_staff_vat_mode_override === false)}
-                    onClick={() => setVatCalcMode('EXCLUSIVE')}
+                    onClick={() => handleVatModeChange('EXCLUSIVE')}
                     className={`p-2.5 rounded-lg border text-xs font-semibold transition-all cursor-pointer ${
                       vatCalcMode === 'EXCLUSIVE'
                         ? 'bg-teal-50 border-teal-500 text-teal-900 shadow-xs'
@@ -838,7 +1150,7 @@ export function PurchaseFormPage() {
                   <button
                     type="button"
                     disabled={isFinanciallyLocked || (user?.role === 'STAFF' && settings?.allow_staff_vat_mode_override === false)}
-                    onClick={() => setVatCalcMode('INCLUSIVE')}
+                    onClick={() => handleVatModeChange('INCLUSIVE')}
                     className={`p-2.5 rounded-lg border text-xs font-semibold transition-all cursor-pointer ${
                       vatCalcMode === 'INCLUSIVE'
                         ? 'bg-emerald-50 border-emerald-500 text-emerald-900 shadow-xs'
@@ -1085,79 +1397,6 @@ export function PurchaseFormPage() {
               </div>
             </div>
           </div>
-        </div>
-
-        {/* Section 4: Drag & Drop VAT Bill Upload */}
-        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-            <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
-              <Upload className="w-4 h-4 text-emerald-600" />
-              <span>Attach Physical VAT Bill / Tax Invoice (Optional)</span>
-            </div>
-          </div>
-
-          <div
-            onClick={() => fileInputRef.current?.click()}
-            className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${
-              vatBillFile
-                ? 'border-emerald-400 bg-emerald-50/40'
-                : 'border-slate-300 hover:border-emerald-500 bg-slate-50/50'
-            }`}
-          >
-            <input
-              type="file"
-              ref={fileInputRef}
-              accept=".jpg,.jpeg,.png,.webp,.pdf"
-              className="hidden"
-              onChange={(e) => {
-                if (e.target.files?.[0]) {
-                  setVatBillFile(e.target.files[0]);
-                }
-              }}
-            />
-
-            {vatBillFile ? (
-              <div className="flex items-center justify-center gap-3">
-                <FileText className="w-8 h-8 text-emerald-600 shrink-0" />
-                <div className="text-left">
-                  <p className="font-bold text-xs text-slate-900">{vatBillFile.name}</p>
-                  <p className="text-[11px] text-slate-500 font-mono">
-                    {(vatBillFile.size / 1024).toFixed(1)} KB • Click to choose a different file
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setVatBillFile(null);
-                  }}
-                  className="p-1 rounded-full hover:bg-slate-200 text-slate-500"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            ) : (
-              <div>
-                <Upload className="w-8 h-8 mx-auto text-slate-400 mb-2" />
-                <p className="text-xs font-semibold text-slate-700">
-                  Click or drag & drop to upload supplier VAT bill (PDF, JPG, PNG, WEBP)
-                </p>
-                <p className="text-[11px] text-slate-400 mt-1">
-                  Maximum file size: 10MB
-                </p>
-              </div>
-            )}
-          </div>
-
-          {!vatBillFile && (
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-              <span>
-                <strong>No bill attached?</strong> Purchase status will automatically be set to{' '}
-                <strong className="font-semibold">VAT BILL PENDING</strong>. You can upload the bill later from the detail view or pending queue!
-              </span>
-            </div>
-          )}
         </div>
 
         {/* Submit Actions */}
