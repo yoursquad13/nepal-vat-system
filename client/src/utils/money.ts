@@ -129,3 +129,5 @@ export function formatNpr(amount: number | string): string {
 
   return `${isNegative ? '-' : ''}Rs. ${absFormatted}`;
 }
+
+export const formatNPR = formatNpr;

@@ -234,6 +234,8 @@ export interface PaymentSlip {
 export interface Payment {
   id: number;
   purchase_id: number;
+  purchase_code?: string;
+  bill_number?: string | null;
   vendor_id: number;
   amount: number;
   payment_date_ad: string;
@@ -334,6 +336,10 @@ export interface InventoryMovement {
   product_name?: string;
   sku?: string;
   unit_of_measurement?: string;
+  purchase_code?: string;
+  vendor_name?: string;
+  vendor_id?: number | null;
+  remarks?: string | null;
 }
 
 export type StockOutReason = 'SOLD' | 'INTERNAL_ISSUE' | 'DAMAGED_EXPIRED' | 'OTHER';
@@ -936,6 +942,8 @@ export const api = {
         total: number;
         page: number;
         limit: number;
+        totalPages?: number;
+        total_pages?: number;
       }>(`/api/inventory/movements?${sp.toString()}`);
     },
     stockOut: (data: StockOutParams) =>

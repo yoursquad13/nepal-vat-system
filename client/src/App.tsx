@@ -8,6 +8,13 @@ import { PurchasesPage } from './pages/PurchasesPage';
 import { PurchaseFormPage } from './pages/PurchaseFormPage';
 import { PurchaseDetailPage } from './pages/PurchaseDetailPage';
 import { VatPendingPage } from './pages/VatPendingPage';
+import { AdminReviewPage } from './pages/AdminReviewPage';
+import { VendorsPage } from './pages/VendorsPage';
+import { VendorProfilePage } from './pages/VendorProfilePage';
+import { VendorPaymentsPage } from './pages/VendorPaymentsPage';
+import { InventoryDashboardPage } from './pages/InventoryDashboardPage';
+import { ProductsPage } from './pages/ProductsPage';
+import { ProductDetailPage } from './pages/ProductDetailPage';
 import { Construction } from 'lucide-react';
 
 /**
@@ -87,58 +94,13 @@ export default function App() {
               <Route path="vat-pending" element={<VatPendingPage />} />
 
               {/* Vendors Section */}
-              <Route
-                path="vendors"
-                element={
-                  <RoutePlaceholder
-                    title="Suppliers & Vendors Directory"
-                    subtitle="Searchable vendor profiles with PAN/VAT, bank details, and clickable telephone call buttons."
-                    taskPhase="Task 11: Vendor Payments & Inventory Operations"
-                  />
-                }
-              />
-              <Route
-                path="vendors/:id"
-                element={
-                  <RoutePlaceholder
-                    title="Vendor Profile & Ledger"
-                    subtitle="Cumulative purchases, unpaid balances, VAT compliance, and payment records."
-                    taskPhase="Task 11: Vendor Payments & Inventory Operations"
-                  />
-                }
-              />
+              <Route path="vendors" element={<VendorsPage />} />
+              <Route path="vendors/:id" element={<VendorProfilePage />} />
 
               {/* Inventory & Products Section */}
-              <Route
-                path="inventory"
-                element={
-                  <RoutePlaceholder
-                    title="Inventory Management & Movements"
-                    subtitle="Stock ledger, stock in/out forms, adjustments, and reorder point alerts."
-                    taskPhase="Task 11: Vendor Payments & Inventory Operations"
-                  />
-                }
-              />
-              <Route
-                path="products"
-                element={
-                  <RoutePlaceholder
-                    title="Products Master Catalog"
-                    subtitle="Product registry with categories, units of measurement, and current stock."
-                    taskPhase="Task 11: Vendor Payments & Inventory Operations"
-                  />
-                }
-              />
-              <Route
-                path="products/:id"
-                element={
-                  <RoutePlaceholder
-                    title="Product Detail & Stock Movements Ledger"
-                    subtitle="Transaction history, supplier comparisons, and weighted average cost."
-                    taskPhase="Task 11: Vendor Payments & Inventory Operations"
-                  />
-                }
-              />
+              <Route path="inventory" element={<InventoryDashboardPage />} />
+              <Route path="products" element={<ProductsPage />} />
+              <Route path="products/:id" element={<ProductDetailPage />} />
 
               {/* Reports Section */}
               <Route
@@ -157,11 +119,7 @@ export default function App() {
                 path="admin/review"
                 element={
                   <RequireAdmin>
-                    <RoutePlaceholder
-                      title="Admin Review & Approval Queue"
-                      subtitle="Pending purchase approval, bill verification, and payment authorization."
-                      taskPhase="Task 10: Purchases, VAT Workflow & Review Queue"
-                    />
+                    <AdminReviewPage />
                   </RequireAdmin>
                 }
               />
@@ -169,11 +127,7 @@ export default function App() {
                 path="payments"
                 element={
                   <RequireAdmin>
-                    <RoutePlaceholder
-                      title="Vendor Payment Dashboard"
-                      subtitle="Outstanding payables by vendor, partial/full settlements, and bank transfer slip uploads."
-                      taskPhase="Task 11: Vendor Payments & Inventory Operations"
-                    />
+                    <VendorPaymentsPage />
                   </RequireAdmin>
                 }
               />

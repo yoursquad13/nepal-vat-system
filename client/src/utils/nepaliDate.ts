@@ -369,3 +369,14 @@ export function resolveDatePreset(preset: DatePreset, refDate?: Date): DateRange
       throw new Error(`Unknown date preset: "${preset}"`);
   }
 }
+
+/**
+ * Formats a BS and AD date pairing cleanly for UI display.
+ * e.g., "2081-07-28 BS (2024-11-13 AD)"
+ */
+export function formatBsAd(bs?: string | null, ad?: string | null): string {
+  if (bs && ad) return `${bs} BS (${ad} AD)`;
+  if (bs) return `${bs} BS`;
+  if (ad) return `${ad} AD`;
+  return '—';
+}
